@@ -14,6 +14,10 @@ La ingesta de datos fue diseñada como un proceso reproducible que permite descu
 
 Los archivos originales y procesados de MiBici no se almacenan en el repositorio debido a su tamaño. Estos pueden obtenerse automáticamente mediante el pipeline de ingesta.
 
+### Requisitos
+
+- Python 3.10
+
 ### 1. Crear un entorno virtual
 
 ```powershell
