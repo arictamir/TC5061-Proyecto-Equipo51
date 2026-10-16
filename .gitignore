@@ -1,5 +1,9 @@
-# Data
-/data/
+# Data files
+/data/**/*
+
+# Keep the project data directory structure
+!/data/**/
+!/data/**/.gitkeep
 
 # Mac OS-specific storage files
 .DS_Store
