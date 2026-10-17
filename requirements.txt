@@ -9,4 +9,9 @@ pandas==2.3.3
 pyarrow==25.0.1
 requests==2.34.2
 beautifulsoup4==4.15.0
+ipykernel==7.3.0
+matplotlib==3.10.8
+mlflow==3.16.1
+pytest==9.1.1
+scikit-learn==1.7.2
 -e .

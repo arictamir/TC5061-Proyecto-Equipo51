@@ -32,6 +32,24 @@ END_MONTH = 9
 
 NOMENCLATURE_FILE = "nomenclatura_2026_09.csv"
 
+# Configuración de P2: clasificación de riesgo operativo por estación y hora
+SEMILLA_ALEATORIA = 777
+P2_HORIZONTE_HORAS = 2
+
+# Los límites finales son exclusivos para evitar traslapes entre conjuntos.
+P2_INICIO_ENTRENAMIENTO = "2024-01-01"
+P2_FIN_ENTRENAMIENTO = "2025-01-01"
+P2_INICIO_VALIDACION = "2025-01-01"
+P2_FIN_VALIDACION = "2026-01-01"
+P2_INICIO_PRUEBA = "2026-01-01"
+P2_FIN_PRUEBA = "2026-10-01"
+
+P2_DIR = PROCESSED_DATA_DIR / "p2"
+P2_FIGURAS_DIR = FIGURES_DIR / "p2"
+P2_NOMBRE_EXPERIMENTO = "mibici-equipo51"
+P2_NOMBRE_RUN_BASE = "P2 - clasificador base"
+MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
