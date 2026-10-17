@@ -36,6 +36,12 @@ NOMENCLATURE_FILE = "nomenclatura_2026_09.csv"
 SEMILLA_ALEATORIA = 777
 P2_HORIZONTE_HORAS = 2
 
+# Umbrales definidos únicamente con los datos de entrenamiento de 2024.
+P2_CUANTIL_VACIADO = 0.10
+P2_CUANTIL_SATURACION = 0.90
+P2_UMBRAL_VACIADO = -0.16129032258064516
+P2_UMBRAL_SATURACION = 0.15789473684210525
+
 # Los límites finales son exclusivos para evitar traslapes entre conjuntos.
 P2_INICIO_ENTRENAMIENTO = "2024-01-01"
 P2_FIN_ENTRENAMIENTO = "2025-01-01"
