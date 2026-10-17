@@ -27,8 +27,8 @@ MIBICI_OPEN_DATA_URL = "https://mibici.net/es/datos-abiertos/"
 START_YEAR = 2024
 START_MONTH = 1
 
-END_YEAR = 2025
-END_MONTH = 12
+END_YEAR = 2026
+END_MONTH = 9
 
 NOMENCLATURE_FILE = "nomenclatura_2026_09.csv"
 

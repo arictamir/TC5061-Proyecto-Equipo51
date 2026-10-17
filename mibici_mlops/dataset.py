@@ -253,6 +253,12 @@ def clean_trips(df: pd.DataFrame) -> pd.DataFrame:
 
     df.columns = [normalize_column_name(column) for column in df.columns]
 
+    # February and May 2024 contain a malformed source header that
+    # normalizes to ``a_ae_nacimiento`` instead of ``ano_de_nacimiento``.
+    df = df.rename(
+        columns={"a_ae_nacimiento": "ano_de_nacimiento"}
+    )
+
     date_columns = ["inicio_del_viaje", "fin_del_viaje"]
 
     for column in date_columns:
@@ -260,6 +266,20 @@ def clean_trips(df: pd.DataFrame) -> pd.DataFrame:
             df[column] = parse_datetime_column(df[column])
 
     return df
+
+
+def deduplicate_trips(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove exact duplicate trip rows while preserving the first copy."""
+    duplicate_count = int(df.duplicated().sum())
+
+    if duplicate_count == 0:
+        return df
+
+    logger.warning(
+        f"Removing {duplicate_count:,} exact duplicate trip rows."
+    )
+
+    return df.drop_duplicates().reset_index(drop=True)
 
 
 def validate_trips(df: pd.DataFrame) -> None:
@@ -361,6 +381,34 @@ def validate_nomenclature(df: pd.DataFrame) -> None:
     logger.success("Nomenclature validation passed.")
 
 
+def remove_unexpected_trip_parquets(
+    output_dir: Path,
+    expected_filenames: list[str],
+) -> None:
+    """Remove stale Parquet files from the pipeline-managed trip directory."""
+    managed_output_dir = (PROCESSED_DATA_DIR / "trips").resolve()
+
+    if output_dir.resolve() != managed_output_dir:
+        raise ValueError(
+            f"Refusing to clean unexpected directory: {output_dir}"
+        )
+
+    expected_parquet_names = {
+        filename.replace(".csv", ".parquet")
+        for filename in expected_filenames
+    }
+
+    stale_files = sorted(
+        file_path
+        for file_path in output_dir.glob("*.parquet")
+        if file_path.name not in expected_parquet_names
+    )
+
+    for file_path in stale_files:
+        logger.warning(f"Removing stale Parquet file: {file_path.name}")
+        file_path.unlink()
+
+
 def process_trip_files() -> list[Path]:
     """Clean, validate, and convert monthly trip files to Parquet."""
     trip_filenames = build_trip_filenames(
@@ -373,6 +421,8 @@ def process_trip_files() -> list[Path]:
     output_dir = PROCESSED_DATA_DIR / "trips"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    remove_unexpected_trip_parquets(output_dir, trip_filenames)
+
     processed_files = []
 
     for filename in trip_filenames:
@@ -383,6 +433,7 @@ def process_trip_files() -> list[Path]:
 
         df = read_mibici_csv(input_path)
         df = clean_trips(df)
+        df = deduplicate_trips(df)
         validate_trips(df)
 
         df.to_parquet(
