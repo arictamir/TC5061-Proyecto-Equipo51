@@ -2,6 +2,7 @@ loguru==0.7.3
 mkdocs==1.6.1
 pip==26.2.1
 python-dotenv==1.2.4
+ipykernel==7.4.0
 ruff==0.17.1
 tqdm==4.70.1
 typer==0.27.3
