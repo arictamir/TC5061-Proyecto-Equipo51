@@ -1245,8 +1245,6 @@ PASOS_EXPERIMENTO_COMPLETO = [
             str(SEMILLA_ALEATORIA),
             "--metrics-path",
             "data/processed/p2/metricas_desarrollo.csv",
-            "--figures-dir",
-            "data/processed/p2/figuras_desarrollo",
         ],
     ),
     (
@@ -1268,8 +1266,6 @@ PASOS_EXPERIMENTO_COMPLETO = [
             str(SEMILLA_ALEATORIA),
             "--metrics-path",
             "data/processed/p2/metricas_finales.csv",
-            "--figures-dir",
-            "data/processed/p2/figuras_finales",
             "--model-path",
             "models/p2/modelo_p2.skops",
         ],

@@ -222,7 +222,7 @@ Los datos y modelos grandes se generan localmente y se mantienen fuera de Git. L
 | P2 | `data/processed/p2/dataset_p2.parquet` | Conjunto estación-hora con características, objetivo y partición |
 | P2 | `data/processed/p2/metricas_desarrollo.csv` | Comparación de referencia y modelo en entrenamiento y validación |
 | P2 | `data/processed/p2/metricas_finales.csv` | Métricas finales de entrenamiento, validación y prueba |
-| P2 | `data/processed/p2/figuras_desarrollo/` y `figuras_finales/` | Matrices de confusión |
+| P2 | `reports/figures/p2/` | Matrices de confusión de desarrollo y evaluación final |
 | P2 | `models/p2/modelo_p2.skops` | Modelo final serializado |
 | P3 | `reports/figures/p3_clusters_spatial.png` | Mapa de estaciones por grupo |
 | Experimento | `mlruns/` y `mlartifacts/` | Almacenamiento local del servidor MLflow |
@@ -311,7 +311,7 @@ TC5061-Proyecto-Equipo51/
 │   └── processed/                        # Datos procesados; ignorados por Git
 │       ├── trips/                        # 33 Parquet mensuales de viajes
 │       ├── nomenclature/                 # Parquet de estaciones
-│       └── p2/                           # Dataset, métricas y figuras de P2
+│       └── p2/                           # Dataset y métricas de P2
 ├── docs/                                 # Sitio de documentación con MkDocs
 │   ├── docs/
 │   │   ├── getting-started.md
@@ -334,6 +334,7 @@ TC5061-Proyecto-Equipo51/
 ├── references/                           # Documentos de consulta no versionados
 ├── reports/
 │   └── figures/
+│       ├── p2/                           # Matrices de confusión generadas por P2
 │       └── p3_clusters_spatial.png       # Mapa local generado por P3
 ├── tests/
 │   ├── test_features_p2.py
