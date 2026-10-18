@@ -58,8 +58,6 @@ Los modelos trabajan con datos agregados por hora o estación. Las variables per
 
 Esta condición se verificó en las tres preguntas: P1 utiliza estación, calendario y demanda histórica; P2 utiliza estación, capacidad, ubicación y flujos históricos; P3 utiliza ubicación, capacidad y perfiles agregados de entradas y salidas. Ninguna matriz de modelado incluye `usuario_id`, `genero` ni `ano_de_nacimiento`.
 
-> **Verificación antes de la entrega:** si P1 o P3 reciben cambios posteriores, el equipo debe rectificar nuevamente que ninguna variable personal se haya incorporado a sus características ni a los artefactos publicados.
-
 La página pública consultada no muestra una licencia explícita para los archivos. Por ello, el proyecto conserva la atribución a MiBici y se limita a un uso académico. También se considera el [aviso de privacidad de MiBici](https://mibici.net/es/aviso-de-privacidad/).
 
 ## 3. Diseño de las tres preguntas
