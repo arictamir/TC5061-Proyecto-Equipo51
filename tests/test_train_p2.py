@@ -13,7 +13,6 @@ from mibici_mlops.modeling import train
 from mibici_mlops.modeling.train import (
     CONJUNTOS_DESARROLLO,
     ETIQUETA_EQUIPO,
-    ETIQUETA_PREGUNTA,
     NOMBRE_RUN_DUMMY,
     NOMBRE_RUN_LOGISTICA,
     NombreModelo,
@@ -27,6 +26,7 @@ from mibici_mlops.modeling.train import (
     crear_parametros_mlflow,
     crear_regresion_logistica,
     entrenar_y_evaluar_desarrollo,
+    experimento_completo,
     prefijar_metricas_mlflow,
     seleccionar_mejor_modelo,
     separar_variables,
@@ -111,14 +111,22 @@ def test_version_de_datos_se_lee_desde_manifiesto(tmp_path: Path) -> None:
     assert version == "version-de-prueba"
 
 
-def test_etiquetas_mlflow_identifican_equipo_pregunta_y_commit() -> None:
-    etiquetas = crear_etiquetas_mlflow("abc123", "desarrollo")
+def test_etiquetas_mlflow_tienen_un_esquema_comun() -> None:
+    etiquetas = crear_etiquetas_mlflow(
+        pregunta="P2",
+        tipo_tarea="clasificacion",
+        etapa="desarrollo",
+        rol_modelo="candidato",
+        commit_git="abc123",
+    )
 
     assert etiquetas == {
         "equipo": ETIQUETA_EQUIPO,
-        "pregunta": ETIQUETA_PREGUNTA,
-        "git_commit": "abc123",
+        "pregunta": "P2",
+        "tipo_tarea": "clasificacion",
         "etapa": "desarrollo",
+        "rol_modelo": "candidato",
+        "git_commit": "abc123",
     }
 
 
@@ -249,3 +257,46 @@ def test_comparacion_no_carga_prueba(tmp_path: Path) -> None:
 
     assert set(dataset["conjunto"].unique()) == {"entrenamiento", "validacion"}
     assert "prueba" not in dataset["conjunto"].values
+
+
+def test_experimento_completo_ejecuta_todas_las_etapas_en_orden(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    etapas_ejecutadas = []
+
+    def registrar_etapa(nombre: str, comando: list[str]) -> None:
+        etapas_ejecutadas.append((nombre, comando))
+
+    monkeypatch.setattr(train, "ejecutar_paso_experimento", registrar_etapa)
+
+    experimento_completo()
+
+    assert [nombre for nombre, _ in etapas_ejecutadas] == [
+        "P1: regresión de demanda",
+        "P2: construcción del conjunto estación-hora",
+        "P2: comparación de modelos",
+        "P2: evaluación final",
+        "P3: agrupamiento de estaciones",
+    ]
+
+
+def test_experimento_completo_se_detiene_si_falla_una_etapa(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    etapas_ejecutadas = []
+
+    def fallar_en_comparacion(nombre: str, comando: list[str]) -> None:
+        etapas_ejecutadas.append(nombre)
+        if nombre == "P2: comparación de modelos":
+            raise RuntimeError("fallo simulado")
+
+    monkeypatch.setattr(train, "ejecutar_paso_experimento", fallar_en_comparacion)
+
+    with pytest.raises(RuntimeError, match="fallo simulado"):
+        experimento_completo()
+
+    assert etapas_ejecutadas == [
+        "P1: regresión de demanda",
+        "P2: construcción del conjunto estación-hora",
+        "P2: comparación de modelos",
+    ]

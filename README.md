@@ -83,9 +83,9 @@ python -m mlflow ui --host 127.0.0.1 --port 5000
 
 Después abre [http://127.0.0.1:5000](http://127.0.0.1:5000) en el navegador. La segunda terminal debe permanecer abierta mientras se ejecutan los experimentos.
 
-### 5. Regresar a la primera terminal y ejecutar P2
+### 5. Regresar a la primera terminal y ejecutar el experimento completo
 
-Regresa a la primera terminal, que conserva el entorno activo desde el paso 2, y ejecuta el pipeline completo en el siguiente orden.
+Regresa a la primera terminal, que conserva el entorno activo desde el paso 2, y ejecuta los siguientes pasos en orden.
 
 #### 5.1 Ingesta de datos
 
@@ -93,47 +93,19 @@ Regresa a la primera terminal, que conserva el entorno activo desde el paso 2, y
 python -m mibici_mlops.dataset
 ```
 
-#### 5.2 Construcción del conjunto estación-hora
-
-```powershell
-python -m mibici_mlops.features p2
-```
-
-#### 5.3 Pruebas automatizadas
+#### 5.2 Pruebas automatizadas
 
 ```powershell
 python -m pytest tests/test_features_p2.py tests/test_train_p2.py -v
 ```
 
-#### 5.4 Comparación de modelos
+#### 5.3 Ejecución unificada de P1, P2 y P3
 
 ```powershell
-python -m mibici_mlops.modeling.train comparar `
-    --c 1.0 `
-    --solver saga `
-    --max-iter 100 `
-    --semilla 777 `
-    --metrics-path data/processed/p2/metricas_desarrollo.csv `
-    --figures-dir data/processed/p2/figuras_desarrollo
+python -m mibici_mlops.modeling.train experimento-completo
 ```
 
-Revisa en MLflow las métricas de validación y selecciona el modelo. La selección actual es `logistic_regression` por su mayor F1 macro de validación.
-
-#### 5.5 Evaluación final
-
-Este paso consulta el conjunto de prueba. Debe ejecutarse únicamente después de seleccionar el modelo con validación y no debe repetirse para ajustar decisiones.
-
-```powershell
-python -m mibici_mlops.modeling.train evaluar-final `
-    --modelo logistic_regression `
-    --c 1.0 `
-    --solver saga `
-    --max-iter 100 `
-    --semilla 777 `
-    --metrics-path data/processed/p2/metricas_finales.csv `
-    --figures-dir data/processed/p2/figuras_finales `
-    --model-path models/p2/modelo_p2.skops
-```
+El comando unificado ejecuta, en procesos separados, P1, la construcción de características de P2, la comparación y evaluación final de P2, y P3. Si una etapa falla, las siguientes no se ejecutan. Para P2 utiliza `logistic_regression`, seleccionada previamente por su mayor F1 macro de validación. Como este flujo consulta el conjunto de prueba, debe utilizarse para la corrida final y no para ajustar decisiones posteriores.
 
 ### Archivos generados localmente
 
@@ -349,7 +321,7 @@ Evidencias:
 * **Entidad de Análisis:** Estación consolidada (`station_id`), caracterizada mediante un vector multidimensional estático derivado del historial operativo (Enero 2024 – Septiembre 2026).
 * **Horizonte:** No aplica horizonte predictivo secuencial; se analiza el comportamiento estructural agregado a nivel estación.
 
-#### 1. Ingeniería de Características (`featuresp3.py`)
+#### 1. Ingeniería de Características (`mibici_mlops/features.py`)
 A partir de los viajes y la nomenclatura oficial, se extrajo una huella funcional de 7 variables normalizadas por estación:
 * **`ratio_am`**: Razón de viajes salientes respecto a entrantes en hora pico matutina (07:00–10:00). Valores altos identifican estaciones predominantemente de origen/residenciales.
 * **`ratio_pm`**: Razón de viajes salientes respecto a entrantes en hora pico vespertina (18:00–21:00). Valores bajos indican zonas de atracción laboral/comercial.
@@ -359,7 +331,7 @@ A partir de los viajes y la nomenclatura oficial, se extrajo una huella funciona
 * **`latitude` y `longitude`**: Coordenadas geográficas WGS84 para contextualizar la continuidad y proximidad espacial de los grupos.
 
 #### 2. Modelo Baseline y Métricas de Evaluación
-* **Modelo Baseline:** $K$-Means ($k=4$, `n_init=10`, `random_state=42`) entrenado sobre las características estandarizadas con `StandardScaler`.
+* **Modelo Baseline:** $K$-Means ($k=4$, `n_init=10`, `random_state=777`) entrenado sobre las características estandarizadas con `StandardScaler`.
 * **Métricas de Evaluación:**
   * **Silhouette Score:** Cohesión y separación entre clústeres (rango $[-1, 1]$).
   * **Davies-Bouldin Index (DBI):** Similitud promedio entre cada clúster y su más cercano (valores menores indican mejor separación).
@@ -367,23 +339,23 @@ A partir de los viajes y la nomenclatura oficial, se extrajo una huella funciona
 
 #### 3. Resultados del Experimento Base (MLflow Tracking)
 * **Experimento:** `mibici-equipo51`
-* **Run:** `p3_baseline_kmeans`
+* **Run:** `P3 - KMeans - desarrollo`
 * **Estaciones analizadas:** 471 estaciones activas.
 * **Resultados Obtenidos:**
-  * `test_silhouette_score`: **0.2492**
-  * `test_davies_bouldin_index`: **1.3458**
-  * `test_inertia`: Registrada en el run
+  * `silhouette_score`: **0.2492**
+  * `davies_bouldin_index`: **1.3458**
+  * `inercia`: Registrada en el run
 * **Artefacto:** Mapa geoespacial de asignación de clusters registrado en `reports/figures/p3_clusters_spatial.png` y vinculado al artefacto del run en MLflow.
 
 #### 4. Comandos de Reproducción
 Para ejecutar el pipeline de extracción de variables, entrenamiento y registro en MLflow:
 
-```bash
+```powershell
 # Ejecutar pipeline de P3 desde la raíz del repositorio
-python -m mibici_mlops.modeling.trainp3
+python -m mibici_mlops.modeling.train p3
 
 # Visualizar resultados en MLflow UI
-mlflow ui
+python -m mlflow ui --host 127.0.0.1 --port 5000
 ```
 
 ## Project Organization

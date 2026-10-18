@@ -1,11 +1,11 @@
-"""Entrenamiento y evaluación de los modelos de P1 y P2."""
+"""Entrenamiento y evaluación de los modelos de P1, P2 y P3."""
 
 from enum import Enum
 import json
-from logging import config
 from math import prod
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 from typing import Annotated
 
@@ -16,37 +16,34 @@ from mlflow.models import infer_signature
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
+from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
     ConfusionMatrixDisplay,
     accuracy_score,
+    davies_bouldin_score,
     f1_score,
     mean_absolute_error,
     mean_squared_error,
     recall_score,
+    silhouette_score,
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import skops.io as sio
 import typer
 
-from pathlib import Path
-import subprocess
-import matplotlib.pyplot as plt
-import mlflow
-import pandas as pd
-from sklearn.cluster import KMeans
-from sklearn.metrics import davies_bouldin_score, silhouette_score
-from sklearn.preprocessing import StandardScaler
-
-
 # Configuración centralizada y módulo de features
 from mibici_mlops.config import (
+    END_MONTH,
+    END_YEAR,
+    FIGURES_DIR,
     MLFLOW_TRACKING_URI,
     MODELS_DIR,
     NOMBRE_EXPERIMENTO,
+    NOMENCLATURE_FILE,
     P1_DATA_END,
     P1_DATA_START,
     P1_TEST_START,
@@ -68,23 +65,39 @@ from mibici_mlops.config import (
     PROCESSED_DATA_DIR,
     PROJ_ROOT,
     SEMILLA_ALEATORIA,
-    START_YEAR,
     START_MONTH,
-    END_YEAR,
-    END_MONTH
+    START_YEAR,
 )
 from mibici_mlops.features import (
     COLUMNAS_CARACTERISTICAS_P2,
     build_p1_features,
     build_p1_hourly_demand,
+    generate_p3_station_features,
 )
-
-from mibici_mlops.features import generate_p3_station_features
 
 plt.switch_backend("Agg")
 
 
 app = typer.Typer()
+ETIQUETA_EQUIPO = "51"
+
+
+def crear_etiquetas_mlflow(
+    pregunta: str,
+    tipo_tarea: str,
+    etapa: str,
+    rol_modelo: str,
+    commit_git: str,
+) -> dict[str, str]:
+    """Crea el esquema común de etiquetas para P1, P2 y P3."""
+    return {
+        "equipo": ETIQUETA_EQUIPO,
+        "pregunta": pregunta,
+        "tipo_tarea": tipo_tarea,
+        "etapa": etapa,
+        "rol_modelo": rol_modelo,
+        "git_commit": commit_git,
+    }
 
 # ======================== INICIO ENTRENAMIENTO P1 ========================
 
@@ -94,9 +107,10 @@ def main():
 
     from catboost import CatBoostRegressor
 
-    mlflow.set_experiment("MiBici-P1-Regresion")
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    mlflow.set_experiment(NOMBRE_EXPERIMENTO)
 
-    logger.info("MLflow experiment configured: MiBici-P1-Regresion")
+    logger.info(f"Experimento de MLflow configurado: {NOMBRE_EXPERIMENTO}")
 
     git_commit = subprocess.check_output(
         ["git", "rev-parse", "HEAD"],
@@ -253,36 +267,37 @@ def main():
 
     logger.success("P1 seasonal naive baseline evaluated successfully.")
 
-    with mlflow.start_run(run_name="P1-Seasonal-Naive-Lag168"):
+    with mlflow.start_run(run_name="P1 - Baseline estacional - desarrollo"):
 
         mlflow.log_params(
             {
-                "model": "SeasonalNaive",
+                "modelo": "seasonal_naive_lag_168",
+                "semilla": "no_aplica",
                 "baseline_feature": "lag_168",
                 "seasonal_period_hours": 168,
                 "data_start": P1_DATA_START,
                 "data_end": P1_DATA_END,
                 "validation_start": P1_VALIDATION_START,
                 "test_start": P1_TEST_START,
-                "dataset_version": dataset_version,
+                "version_datos": dataset_version,
             }
         )
 
         mlflow.log_metrics(
             {
-                "validation_mae": baseline_validation_mae,
-                "validation_rmse": baseline_validation_rmse,
+                "validacion_mae": baseline_validation_mae,
+                "validacion_rmse": baseline_validation_rmse,
             }
         )
 
         mlflow.set_tags(
-            {
-                "question": "P1",
-                "task": "regression",
-                "model_role": "baseline",
-                "git_commit": git_commit,
-                "team": "Equipo51",
-            }
+            crear_etiquetas_mlflow(
+                pregunta="P1",
+                tipo_tarea="regresion",
+                etapa="desarrollo",
+                rol_modelo="baseline",
+                commit_git=git_commit,
+            )
         )
 
         baseline_metadata = {
@@ -308,31 +323,32 @@ def main():
 
         logger.success("P1 seasonal naive baseline logged to MLflow.")
 
-    with mlflow.start_run(run_name="P1-CatBoost-200-final"):
+    with mlflow.start_run(run_name="P1 - CatBoost - evaluación final"):
 
         mlflow.log_params(
             {
-                "model": "CatBoostRegressor",
+                "modelo": "catboost_regressor",
                 "iterations": 200,
                 "learning_rate": 0.1,
                 "depth": 6,
                 "loss_function": "RMSE",
-                "random_seed": SEMILLA_ALEATORIA,
+                "semilla": SEMILLA_ALEATORIA,
                 "data_start": P1_DATA_START,
                 "data_end": P1_DATA_END,
                 "validation_start": P1_VALIDATION_START,
                 "test_start": P1_TEST_START,
-                "dataset_version": dataset_version,
+                "version_datos": dataset_version,
             }
         )
 
         mlflow.set_tags(
-            {
-                "question": "P1",
-                "task": "regression",
-                "git_commit": git_commit,
-                "team": "Equipo51",
-            }
+            crear_etiquetas_mlflow(
+                pregunta="P1",
+                tipo_tarea="regresion",
+                etapa="evaluacion_final",
+                rol_modelo="final",
+                commit_git=git_commit,
+            )
         )
 
         logger.info("MLflow run started and metadata logged.")
@@ -344,7 +360,7 @@ def main():
             learning_rate=0.1,
             depth=6,
             loss_function="RMSE",
-            random_seed=42,
+            random_seed=SEMILLA_ALEATORIA,
             verbose=50,
         )
 
@@ -428,12 +444,12 @@ def main():
 
         mlflow.log_metrics(
             {
-                "validation_mae": validation_mae,
-                "validation_rmse": validation_rmse,
-                "validation_mae_positive": validation_mae_positive,
-                "test_mae": test_mae,
-                "test_rmse": test_rmse,
-                "test_mae_positive": test_mae_positive,
+                "validacion_mae": validation_mae,
+                "validacion_rmse": validation_rmse,
+                "validacion_mae_positiva": validation_mae_positive,
+                "prueba_mae": test_mae,
+                "prueba_rmse": test_rmse,
+                "prueba_mae_positiva": test_mae_positive,
             }
         )
 
@@ -462,9 +478,6 @@ RUTA_MANIFIESTO = PROJ_ROOT / "data_manifest.json"
 NOMBRE_RUN_DUMMY = "P2 - Dummy estratificado - desarrollo"
 NOMBRE_RUN_LOGISTICA = "P2 - Regresión logística - desarrollo"
 NOMBRE_RUN_FINAL = "P2 - Regresión logística - evaluación final"
-
-ETIQUETA_EQUIPO = "51"
-ETIQUETA_PREGUNTA = "P2"
 
 
 class NombreModelo(str, Enum):
@@ -518,16 +531,6 @@ def obtener_commit_git() -> str:
     if not commit:
         raise RuntimeError("Git devolvió un commit vacío.")
     return commit
-
-
-def crear_etiquetas_mlflow(commit_git: str, etapa: str) -> dict[str, str]:
-    """Crea las etiquetas exigidas para identificar una corrida."""
-    return {
-        "equipo": ETIQUETA_EQUIPO,
-        "pregunta": ETIQUETA_PREGUNTA,
-        "git_commit": commit_git,
-        "etapa": etapa,
-    }
 
 
 def crear_parametros_mlflow(
@@ -813,7 +816,20 @@ def entrenar_y_evaluar_desarrollo(
 
     for nombre in [NombreModelo.DUMMY, NombreModelo.LOGISTICA]:
         with mlflow.start_run(run_name=nombres_run[nombre]):
-            mlflow.set_tags(crear_etiquetas_mlflow(commit_git, "desarrollo"))
+            rol_modelo = (
+                "baseline"
+                if nombre == NombreModelo.DUMMY
+                else "candidato"
+            )
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    pregunta="P2",
+                    tipo_tarea="clasificacion",
+                    etapa="desarrollo",
+                    rol_modelo=rol_modelo,
+                    commit_git=commit_git,
+                )
+            )
             mlflow.log_params(
                 crear_parametros_mlflow(
                     nombre,
@@ -975,7 +991,15 @@ def evaluar_final(
     }
 
     with mlflow.start_run(run_name=NOMBRE_RUN_FINAL):
-        mlflow.set_tags(crear_etiquetas_mlflow(commit_git, "evaluacion_final"))
+        mlflow.set_tags(
+            crear_etiquetas_mlflow(
+                pregunta="P2",
+                tipo_tarea="clasificacion",
+                etapa="evaluacion_final",
+                rol_modelo="final",
+                commit_git=commit_git,
+            )
+        )
         mlflow.log_params(
             crear_parametros_mlflow(
                 modelo,
@@ -1046,17 +1070,6 @@ def evaluar_final(
 
 # ========================= INICIO ENTRENAMIENTO P3 ==========================
 
-def get_git_commit_hash() -> str:
-    """Recupera el hash del commit actual para trazabilidad en MLflow."""
-    try:
-        return (
-            subprocess.check_output(["git", "rev-parse", "HEAD"])
-            .decode("ascii")
-            .strip()
-        )
-    except Exception:
-        return "sin_commit_local"
-
 
 def load_processed_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     """Carga los conjuntos procesados de viajes y nomenclatura desde data/processed/."""
@@ -1091,29 +1104,32 @@ def load_processed_data() -> tuple[pd.DataFrame, pd.DataFrame]:
     return trips_df, stations_df
 
 
-def train_p3_baseline():
-    """Ejecuta el pipeline de clustering y registra parámetros, métricas y artefactos."""
+@app.command("p3")
+def train_p3_baseline() -> None:
+    """Ejecuta el baseline de clustering de P3 y lo registra en MLflow."""
     print("1. Cargando datos desde data/processed/ (Ene 2024 - Sep 2026)...")
     trips_df, stations_df = load_processed_data()
 
-    print("2. Generando features a nivel estación con featuresp3...")
+    print("2. Generando características a nivel estación con features.py...")
     features_df = generate_p3_station_features(trips_df, stations_df)
     n_stations, n_features = features_df.shape
     print(f"   Matriz construida: {n_stations} estaciones y {n_features} variables.")
 
     print(f"3. Configurando experimento en MLflow: {NOMBRE_EXPERIMENTO}...")
-    mlflow.set_experiment(NOMBRE_EXPERIMENTO)
+    configurar_mlflow()
+    version_datos = cargar_version_datos()
+    commit_hash = obtener_commit_git()
 
-    with mlflow.start_run(run_name="p3_baseline_kmeans"):
+    with mlflow.start_run(run_name="P3 - KMeans - desarrollo"):
         # Tags de trazabilidad y gobernanza
-        commit_hash = get_git_commit_hash()
         mlflow.set_tags(
-            {
-                "equipo": "equipo51",
-                "pregunta": "P3",
-                "tipo_tarea": "clustering",
-                "git_commit": commit_hash,
-            }
+            crear_etiquetas_mlflow(
+                pregunta="P3",
+                tipo_tarea="clustering",
+                etapa="desarrollo",
+                rol_modelo="baseline",
+                commit_git=commit_hash,
+            )
         )
 
         # Escalado estandarizado
@@ -1142,10 +1158,11 @@ def train_p3_baseline():
                 "start_month": START_MONTH,
                 "end_year": END_YEAR,
                 "end_month": END_MONTH,
-                "nomenclature_file": config.NOMENCLATURE_FILE,
-                "model_type": "KMeans",
-                "n_clusters": config.P3_DEFAULT_K,
-                "random_state": config.SEMILLA_ALEATORIA,
+                "nomenclature_file": NOMENCLATURE_FILE,
+                "version_datos": version_datos,
+                "modelo": "kmeans",
+                "n_clusters": P3_DEFAULT_K,
+                "semilla": SEMILLA_ALEATORIA,
                 "scaler": "StandardScaler",
                 "n_stations": n_stations,
                 "features_list": list(features_df.columns),
@@ -1155,17 +1172,17 @@ def train_p3_baseline():
         # Registro de Métricas con prefijo identificador
         mlflow.log_metrics(
             {
-                "test_silhouette_score": sil_score,
-                "test_davies_bouldin_index": db_score,
-                "test_inertia": inertia_score,
+                "silhouette_score": sil_score,
+                "davies_bouldin_index": db_score,
+                "inercia": inertia_score,
             }
         )
 
         # Generación del artefacto: mapa de clusters
-        config.FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-        figure_path = config.FIGURES_DIR / "p3_clusters_spatial.png"
+        FIGURES_DIR.mkdir(parents=True, exist_ok=True)
+        figure_path = FIGURES_DIR / "p3_clusters_spatial.png"
 
-        fig, ax = plt.subplots(figsize=(8, 6))
+        figure, ax = plt.subplots(figsize=(8, 6))
         scatter = ax.scatter(
             features_df["longitude"],
             features_df["latitude"],
@@ -1184,13 +1201,14 @@ def train_p3_baseline():
         ax.set_xlabel("Longitud")
         ax.set_ylabel("Latitud")
         ax.grid(True, linestyle=":", alpha=0.6)
-        plt.colorbar(scatter, label="Cluster")
-        plt.tight_layout()
-        plt.savefig(figure_path, dpi=200)
-        plt.close()
+        figure.colorbar(scatter, ax=ax, label="Cluster")
+        figure.tight_layout()
+        figure.savefig(figure_path, dpi=200)
+        plt.close(figure)
 
-        # Registro del artefacto visual en MLflow
-        mlflow.log_artifact(str(figure_path))
+        # Registro de artefactos para resultado y reproducibilidad
+        mlflow.log_artifact(str(figure_path), artifact_path="figuras")
+        mlflow.log_artifact(str(RUTA_MANIFIESTO), artifact_path="reproducibilidad")
 
         print(
             f"\nRun P3 registrado en MLflow con éxito:"
@@ -1201,7 +1219,90 @@ def train_p3_baseline():
         )
 
 
+PASOS_EXPERIMENTO_COMPLETO = [
+    (
+        "P1: regresión de demanda",
+        [sys.executable, "-m", "mibici_mlops.modeling.train", "main"],
+    ),
+    (
+        "P2: construcción del conjunto estación-hora",
+        [sys.executable, "-m", "mibici_mlops.features", "p2"],
+    ),
+    (
+        "P2: comparación de modelos",
+        [
+            sys.executable,
+            "-m",
+            "mibici_mlops.modeling.train",
+            "comparar",
+            "--c",
+            "1.0",
+            "--solver",
+            SolverRegresion.SAGA.value,
+            "--max-iter",
+            "100",
+            "--semilla",
+            str(SEMILLA_ALEATORIA),
+            "--metrics-path",
+            "data/processed/p2/metricas_desarrollo.csv",
+            "--figures-dir",
+            "data/processed/p2/figuras_desarrollo",
+        ],
+    ),
+    (
+        "P2: evaluación final",
+        [
+            sys.executable,
+            "-m",
+            "mibici_mlops.modeling.train",
+            "evaluar-final",
+            "--modelo",
+            NombreModelo.LOGISTICA.value,
+            "--c",
+            "1.0",
+            "--solver",
+            SolverRegresion.SAGA.value,
+            "--max-iter",
+            "100",
+            "--semilla",
+            str(SEMILLA_ALEATORIA),
+            "--metrics-path",
+            "data/processed/p2/metricas_finales.csv",
+            "--figures-dir",
+            "data/processed/p2/figuras_finales",
+            "--model-path",
+            "models/p2/modelo_p2.skops",
+        ],
+    ),
+    (
+        "P3: agrupamiento de estaciones",
+        [sys.executable, "-m", "mibici_mlops.modeling.train", "p3"],
+    ),
+]
+
+
+def ejecutar_paso_experimento(nombre: str, comando: list[str]) -> None:
+    """Ejecuta una etapa aislada y detiene el pipeline si esta falla."""
+    logger.info(f"Iniciando {nombre}.")
+    try:
+        subprocess.run(comando, cwd=PROJ_ROOT, check=True)
+    except subprocess.CalledProcessError as error:
+        logger.error(f"Falló {nombre}. El experimento se detendrá.")
+        raise typer.Exit(code=error.returncode) from error
+    logger.success(f"Etapa terminada: {nombre}.")
+
+
+@app.command("experimento-completo")
+def experimento_completo() -> None:
+    """Ejecuta P1, P2 y P3 en orden después de realizar la ingesta."""
+    logger.info(
+        "Ejecutando el experimento completo. "
+        "La ingesta debe haberse ejecutado previamente."
+    )
+    for nombre, comando in PASOS_EXPERIMENTO_COMPLETO:
+        ejecutar_paso_experimento(nombre, comando)
+    logger.success("Experimento completo finalizado correctamente.")
+
 
 if __name__ == "__main__":
     app()
-    train_p3_baseline()
