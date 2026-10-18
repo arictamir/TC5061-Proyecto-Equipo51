@@ -3,7 +3,7 @@
 import pandas as pd
 import pytest
 
-from mibici_mlops.features_p2 import (
+from mibici_mlops.features import (
     agregar_caracteristicas_historicas,
     agregar_objetivo_p2,
     asignar_conjunto_temporal,

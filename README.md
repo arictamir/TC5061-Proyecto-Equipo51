@@ -104,11 +104,11 @@ flowchart LR
 
     K[EDA: 2.0-ih-p2-eda.ipynb] --> L[Configuración y umbrales: config.py]
 
-    D --> F[Características: features_p2.py]
+    D --> F[Características: features.py]
     L --> F
     F --> G[dataset_p2.parquet]
 
-    G --> H[Entrenamiento: train_p2.py]
+    G --> H[Entrenamiento: train.py]
     E --> H
     H --> I[MLflow: parámetros, métricas y artefactos]
     H --> J[Modelo .skops y matrices de confusión]
@@ -220,7 +220,7 @@ python -m mibici_mlops.dataset
 #### 5.2 Construcción del conjunto estación-hora
 
 ```powershell
-python -m mibici_mlops.features_p2
+python -m mibici_mlops.features p2
 ```
 
 #### 5.3 Pruebas automatizadas
@@ -232,7 +232,7 @@ python -m pytest tests/test_features_p2.py tests/test_train_p2.py -v
 #### 5.4 Comparación de modelos
 
 ```powershell
-python -m mibici_mlops.modeling.train_p2 comparar `
+python -m mibici_mlops.modeling.train comparar `
     --c 1.0 `
     --solver saga `
     --max-iter 100 `
@@ -248,7 +248,7 @@ Revisa en MLflow las métricas de validación y selecciona el modelo. La selecci
 Este paso consulta el conjunto de prueba. Debe ejecutarse únicamente después de seleccionar el modelo con validación y no debe repetirse para ajustar decisiones.
 
 ```powershell
-python -m mibici_mlops.modeling.train_p2 evaluar-final `
+python -m mibici_mlops.modeling.train evaluar-final `
     --modelo logistic_regression `
     --c 1.0 `
     --solver saga `
@@ -391,4 +391,4 @@ Los experimentos se registran en MLflow junto con sus parámetros, métricas, ve
 Una vez ejecutada la ingesta y con el entorno virtual activo:
 
 ```powershell
-python -m mibici_mlops.modeling.train
+python -m mibici_mlops.modeling.train main

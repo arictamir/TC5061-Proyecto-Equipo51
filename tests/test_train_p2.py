@@ -8,9 +8,9 @@ import pytest
 from typer.testing import CliRunner
 
 from mibici_mlops.config import SEMILLA_ALEATORIA
-from mibici_mlops.features_p2 import COLUMNAS_CARACTERISTICAS_P2
-from mibici_mlops.modeling import train_p2
-from mibici_mlops.modeling.train_p2 import (
+from mibici_mlops.features import COLUMNAS_CARACTERISTICAS_P2
+from mibici_mlops.modeling import train
+from mibici_mlops.modeling.train import (
     CONJUNTOS_DESARROLLO,
     ETIQUETA_EQUIPO,
     ETIQUETA_PREGUNTA,
@@ -167,13 +167,13 @@ def test_comparacion_abre_un_run_por_modelo(
         nombres_run.append(run_name)
         return nullcontext()
 
-    monkeypatch.setattr(train_p2.mlflow, "start_run", iniciar_run_simulado)
-    monkeypatch.setattr(train_p2.mlflow, "set_tags", lambda *args, **kwargs: None)
-    monkeypatch.setattr(train_p2.mlflow, "log_params", lambda *args, **kwargs: None)
-    monkeypatch.setattr(train_p2.mlflow, "log_metrics", lambda *args, **kwargs: None)
-    monkeypatch.setattr(train_p2.mlflow, "log_artifact", lambda *args, **kwargs: None)
+    monkeypatch.setattr(train.mlflow, "start_run", iniciar_run_simulado)
+    monkeypatch.setattr(train.mlflow, "set_tags", lambda *args, **kwargs: None)
+    monkeypatch.setattr(train.mlflow, "log_params", lambda *args, **kwargs: None)
+    monkeypatch.setattr(train.mlflow, "log_metrics", lambda *args, **kwargs: None)
+    monkeypatch.setattr(train.mlflow, "log_artifact", lambda *args, **kwargs: None)
     monkeypatch.setattr(
-        train_p2,
+        train,
         "guardar_matriz_confusion",
         lambda *args, **kwargs: None,
     )
