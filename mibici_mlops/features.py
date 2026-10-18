@@ -1,10 +1,8 @@
 """Construcción de características para P1 y P2."""
 
 from pathlib import Path
-from loguru import logger
-from typing import List, Tuple
 
-import numpy as np
+from loguru import logger
 import pandas as pd
 import typer
 
@@ -667,6 +665,19 @@ def _resolve_column_names(df: pd.DataFrame) -> dict:
             col_map["inicio"] = cols_lower[candidate]
             break
 
+    # Buscar columna de fin del viaje
+    for candidate in [
+        "fin_del_viaje",
+        "findelviaje",
+        "fin",
+        "end_time",
+        "ended_at",
+        "trip_end",
+    ]:
+        if candidate in cols_lower:
+            col_map["fin"] = cols_lower[candidate]
+            break
+
     # Buscar columna de ID de viaje
     for candidate in ["viaje_id", "viajeid", "id", "trip_id"]:
         if candidate in cols_lower:
@@ -702,23 +713,33 @@ def _resolve_column_names(df: pd.DataFrame) -> dict:
 
 def compute_hourly_profiles(
     trips_df: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Calcula la distribución de salidas y entradas por franjas horarias y días de la semana."""
     df = trips_df.copy()
     col_map = _resolve_column_names(df)
 
-    inicio_col = col_map.get("inicio", "Inicio_del_viaje")
-    viaje_id_col = col_map.get(
-        "viaje_id", df.columns[0]
-    )  # Si no está, usa la primera columna como contador
-    origen_col = col_map.get("origen", "Origen_Id")
-    destino_col = col_map.get("destino", "Destino_Id")
+    columnas_requeridas = {"inicio", "fin", "origen", "destino"}
+    faltantes = columnas_requeridas - set(col_map)
+    if faltantes:
+        raise ValueError(
+            "No se encontraron columnas necesarias para P3: "
+            f"{sorted(faltantes)}"
+        )
 
-    # Asegurar formato datetime si aún no está tipado
-    if not np.issubdtype(df[inicio_col].dtype, np.datetime64):
+    inicio_col = col_map["inicio"]
+    fin_col = col_map["fin"]
+    viaje_id_col = col_map.get("viaje_id", df.columns[0])
+    origen_col = col_map["origen"]
+    destino_col = col_map["destino"]
+
+    # Las salidas usan el inicio y las entradas usan el fin real del viaje.
+    if not pd.api.types.is_datetime64_any_dtype(df[inicio_col]):
         df[inicio_col] = pd.to_datetime(df[inicio_col])
+    if not pd.api.types.is_datetime64_any_dtype(df[fin_col]):
+        df[fin_col] = pd.to_datetime(df[fin_col])
 
-    df["hora"] = df[inicio_col].dt.hour
+    df["hora_salida"] = df[inicio_col].dt.hour
+    df["hora_entrada"] = df[fin_col].dt.hour
     df["dia_semana"] = df[inicio_col].dt.dayofweek
     df["es_fin_de_semana"] = df["dia_semana"].isin([5, 6]).astype(int)
     df["es_domingo"] = (df["dia_semana"] == 6).astype(int)
@@ -726,8 +747,8 @@ def compute_hourly_profiles(
     # Agregaciones de salida por estación de origen
     salidas_agg = df.groupby(origen_col).agg(
         salidas_totales=(viaje_id_col, "count"),
-        salidas_am=("hora", lambda x: ((x >= 7) & (x <= 10)).sum()),
-        salidas_pm=("hora", lambda x: ((x >= 18) & (x <= 21)).sum()),
+        salidas_am=("hora_salida", lambda x: ((x >= 7) & (x <= 10)).sum()),
+        salidas_pm=("hora_salida", lambda x: ((x >= 18) & (x <= 21)).sum()),
         salidas_fin_semana=("es_fin_de_semana", "sum"),
         salidas_domingo=("es_domingo", "sum"),
     )
@@ -736,8 +757,8 @@ def compute_hourly_profiles(
     # Agregaciones de entrada por estación de destino
     entradas_agg = df.groupby(destino_col).agg(
         entradas_totales=(viaje_id_col, "count"),
-        entradas_am=("hora", lambda x: ((x >= 7) & (x <= 10)).sum()),
-        entradas_pm=("hora", lambda x: ((x >= 18) & (x <= 21)).sum()),
+        entradas_am=("hora_entrada", lambda x: ((x >= 7) & (x <= 10)).sum()),
+        entradas_pm=("hora_entrada", lambda x: ((x >= 18) & (x <= 21)).sum()),
     )
     entradas_agg.index.name = "station_id"
 
@@ -747,7 +768,7 @@ def compute_hourly_profiles(
 def generate_p3_station_features(
     trips_df: pd.DataFrame,
     stations_df: pd.DataFrame,
-    features_list: List[str] = None,
+    features_list: list[str] | None = None,
 ) -> pd.DataFrame:
     """Construye la matriz de características para el clustering de estaciones."""
     salidas, entradas = compute_hourly_profiles(trips_df)
@@ -759,9 +780,9 @@ def generate_p3_station_features(
     found_id = None
     for cand in station_id_candidates:
         if cand in [c.lower() for c in stations.columns]:
-            found_id = [
+            found_id = next(
                 c for c in stations.columns if c.lower() == cand
-            ][0]
+            )
             break
 
     if found_id:
@@ -804,16 +825,24 @@ def generate_p3_station_features(
         )
 
     # Resolver columnas de coordenadas
-    lat_col = [
-        c
-        for c in merged.columns
-        if c.lower() in ["latitude", "latitud", "lat"]
-    ][0]
-    lon_col = [
-        c
-        for c in merged.columns
-        if c.lower() in ["longitude", "longitud", "lon", "lng"]
-    ][0]
+    lat_col = next(
+        (
+            c
+            for c in merged.columns
+            if c.lower() in ["latitude", "latitud", "lat"]
+        ),
+        None,
+    )
+    lon_col = next(
+        (
+            c
+            for c in merged.columns
+            if c.lower() in ["longitude", "longitud", "lon", "lng"]
+        ),
+        None,
+    )
+    if lat_col is None or lon_col is None:
+        raise ValueError("La nomenclatura no contiene latitud y longitud para P3.")
 
     # Renombrar a nombres estándar si difieren
     merged = merged.rename(columns={lat_col: "latitude", lon_col: "longitude"})
