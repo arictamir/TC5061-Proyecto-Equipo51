@@ -5,6 +5,19 @@
 !/data/**/
 !/data/**/.gitkeep
 
+# MLflow
+/mlruns/
+/mlartifacts/
+/mlflow.db
+
+# Serialized models
+/models/*
+!/models/.gitkeep
+*.joblib
+*.pickle
+*.pkl
+*.skops
+
 # Mac OS-specific storage files
 .DS_Store
 
