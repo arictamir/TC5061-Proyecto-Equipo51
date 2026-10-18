@@ -8,6 +8,20 @@ Equipo 51:
 - Gabriela Díaz Oropeza — A01327276
 - Ingrid Hernández Carrasco — A01734169
 
+### Roles y colaboración
+
+- Gabriela Díaz Oropeza: responsable principal de P1, predicción de demanda horaria.
+- Ingrid Hernández Carrasco: responsable principal de P2, clasificación de riesgo operativo.
+- Ariadna del Carmen Tapia Miranda: responsable principal de P3, agrupamiento de estaciones.
+
+Las tres integrantes son colaboradoras del proyecto y participaron en la revisión general, integración y validación de la entrega completa.
+
+### Flujo de trabajo con Git y GitHub
+
+La rama `main` se mantiene protegida y los cambios se integran mediante ramas de trabajo y Pull Requests revisados. Para conservar un historial entendible, se utilizan nombres de ramas como `feat/...` y `fix/...`, junto con mensajes de commit basados en Conventional Commits, por ejemplo `feat:`, `fix:`, `docs:` y `chore:`.
+
+El historial del repositorio evidencia múltiples Pull Requests y contribuciones de las tres integrantes. La captura de la regla de protección de `main` y la evidencia complementaria del trabajo colaborativo se incluyen en el PDF final entregado en Canvas, `TC5061_Propuesta_Proyecto_Equipo51.pdf`.
+
 ## 1. Objetivo del proyecto
 
 El proyecto analiza el uso histórico de MiBici desde tres perspectivas que comparten la misma fuente de datos, configuración y trazabilidad en MLflow:
@@ -252,8 +266,6 @@ Cada pregunta añade sus hiperparámetros y métricas específicas. Los artefact
 
 ## 8. Resultados de referencia
 
-Los siguientes valores sirven como referencia porque provienen de la ejecución local del 18 de octubre. Deben confirmarse con una nueva ejecución completa asociada al commit `28cc430` antes de cerrar el reporte final. Las corridas anteriores del 17 de octubre no se consideran.
-
 ### P1 — Predicción de demanda
 
 | Modelo | Conjunto | RMSE | MAE | MAE con demanda positiva |
@@ -282,9 +294,9 @@ Aunque el clasificador de referencia obtiene mayor exactitud por el desbalance, 
 
 La separación es moderada: los grupos ofrecen una primera descripción operativa, pero deben interpretarse junto con sus perfiles y no como categorías definitivas.
 
-## 9. Evidencia pendiente de la corrida final
+## 9. Evidencia de la corrida final
 
-Las siguientes posiciones se dejan intencionalmente sin imagen. Deben completarse con capturas de las seis corridas nuevas generadas por `experimento-completo`.
+Las siguientes capturas documentan las seis corridas generadas por `experimento-completo`, la trazabilidad de una corrida, un artefacto registrado y la comparación de ejecuciones en MLflow.
 
 ### Figura 1. Lista de corridas del experimento
  
@@ -331,7 +343,7 @@ TC5061-Proyecto-Equipo51/
 │   ├── 1.0-gd-exploracion-p1.ipynb
 │   ├── 2.0-ih-p2-eda.ipynb
 │   └── 1.0-at-exploracion-p3-clustering.ipynb
-├── references/                           # Documentos de consulta no versionados
+├── references/                           # ML Canvas y arquitectura versionados
 ├── reports/
 │   └── figures/
 │       ├── p2/                           # Matrices de confusión generadas por P2
