@@ -196,3 +196,10 @@ cython_debug/
 
 # CatBoost training artifacts
 catboost_info/
+
+# MLflow local tracking
+mlruns/
+mlartifacts/
+mlflow.db
+mlflow.db-shm
+mlflow.db-wal
