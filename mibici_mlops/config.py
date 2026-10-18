@@ -32,8 +32,21 @@ END_MONTH = 9
 
 NOMENCLATURE_FILE = "nomenclatura_2026_09.csv"
 
-# Configuración de P2: clasificación de riesgo operativo por estación y hora
+# ==========================================
+# Reproducibilidad y Configuración de MLflow
+# ==========================================
+NOMBRE_EXPERIMENTO = "mibici-equipo51"
 SEMILLA_ALEATORIA = 777
+MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+
+# P1 temporal configuration
+P1_DATA_START = "2024-01-01 00:00:00"
+P1_DATA_END = "2026-09-30 23:00:00"
+
+P1_VALIDATION_START = "2026-01-01 00:00:00"
+P1_TEST_START = "2026-05-01 00:00:00"
+
+# Configuración de P2: clasificación de riesgo operativo por estación y hora
 P2_HORIZONTE_HORAS = 2
 
 # Umbrales definidos únicamente con los datos de entrenamiento de 2024.
@@ -52,9 +65,12 @@ P2_FIN_PRUEBA = "2026-10-01"
 
 P2_DIR = PROCESSED_DATA_DIR / "p2"
 P2_FIGURAS_DIR = FIGURES_DIR / "p2"
-P2_NOMBRE_EXPERIMENTO = "mibici-equipo51"
 P2_NOMBRE_RUN_BASE = "P2 - clasificador base"
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+
+# ==========================================
+# Parámetros Pregunta 3 (Clustering)
+# ==========================================
+P3_DEFAULT_K = 4
 
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
@@ -66,9 +82,3 @@ try:
 except ModuleNotFoundError:
     pass
 
-# P1 temporal configuration
-P1_DATA_START = "2024-01-01 00:00:00"
-P1_DATA_END = "2026-09-30 23:00:00"
-
-P1_VALIDATION_START = "2026-01-01 00:00:00"
-P1_TEST_START = "2026-05-01 00:00:00"
