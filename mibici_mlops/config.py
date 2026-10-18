@@ -32,6 +32,18 @@ END_MONTH = 9
 
 NOMENCLATURE_FILE = "nomenclatura_2026_09.csv"
 
+# ==========================================
+# Reproducibilidad y Configuración de MLflow
+# ==========================================
+RANDOM_STATE = 42
+MLFLOW_EXPERIMENT_NAME = "mibici-equipo51"
+
+# ==========================================
+# Parámetros Pregunta 3 (Clustering)
+# ==========================================
+P3_DEFAULT_K = 4
+
+
 # If tqdm is installed, configure loguru with tqdm.write
 # https://github.com/Delgan/loguru/issues/135
 try:
