@@ -287,20 +287,20 @@ La separación es moderada: los grupos ofrecen una primera descripción operativ
 Las siguientes posiciones se dejan intencionalmente sin imagen. Deben completarse con capturas de las seis corridas nuevas generadas por `experimento-completo`.
 
 ### Figura 1. Lista de corridas del experimento
-
-<!-- CAPTURA PENDIENTE: vista de MLflow con las seis corridas nuevas, sus nombres y estado Finished. -->
-
+ 
+![Lista de las seis corridas del experimento en MLflow, con sus nombres y estado Finished](reports/figures/evidences/ejecuciones.png)
+ 
 ### Figura 2. Detalle de una corrida
-
-<!-- CAPTURA PENDIENTE: parámetros, métricas y etiquetas comunes, incluido git_commit=28cc430... -->
-
+ 
+![Parámetros, métricas y etiquetas de una corrida, incluido git_commit](reports/figures/evidences/detalle_run.png)
+ 
 ### Figura 3. Artefacto registrado
-
-<!-- CAPTURA PENDIENTE: matriz de confusión, figura de P1/P3 o modelo serializado abierto desde MLflow. -->
-
+ 
+![Artefacto registrado en MLflow, como una matriz de confusión o modelo serializado](reports/figures/p2/figuras_finales/matriz_final_prueba.png)
+ 
 ### Figura 4. Comparación de corridas
-
-<!-- CAPTURA PENDIENTE: comparación de la referencia y el modelo evaluado con las métricas principales. -->
+ 
+![Comparación de ejecuciones](reports/figures/evidences/comparacion_runs.png)
 
 ## 10. Organización del repositorio
 
