@@ -280,6 +280,31 @@ def test_experimento_completo_ejecuta_todas_las_etapas_en_orden(
     ]
 
 
+def test_experimento_completo_usa_directorio_configurado_para_figuras_p2(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    etapas_ejecutadas = []
+
+    def registrar_etapa(nombre: str, comando: list[str]) -> None:
+        etapas_ejecutadas.append((nombre, comando))
+
+    monkeypatch.setattr(train, "ejecutar_paso_experimento", registrar_etapa)
+
+    experimento_completo()
+
+    comandos_p2 = [
+        comando
+        for nombre, comando in etapas_ejecutadas
+        if nombre in {
+            "P2: comparación de modelos",
+            "P2: evaluación final",
+        }
+    ]
+
+    assert len(comandos_p2) == 2
+    assert all("--figures-dir" not in comando for comando in comandos_p2)
+
+
 def test_experimento_completo_se_detiene_si_falla_una_etapa(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
