@@ -193,3 +193,23 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# CatBoost training artifacts
+catboost_info/
+
+# MLflow local tracking
+mlruns/
+mlartifacts/
+mlflow.db
+mlflow.db-shm
+mlflow.db-wal
+
+# Modelos serializados
+models/*
+!models/.gitkeep
+
+# Serialized models
+*.cbm
+*.pkl
+*.pickle
+*.joblib

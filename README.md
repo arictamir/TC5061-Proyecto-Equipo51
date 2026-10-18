@@ -12,15 +12,15 @@ La ingesta de datos fue diseñada como un proceso reproducible que permite descu
 
 ### Periodo de datos
 
-Los datos se utilizarán mediante una división cronológica para el desarrollo y evaluación de los modelos:
+Los datos se utilizan mediante una división cronológica para el desarrollo y evaluación de los modelos. Para P1, la partición temporal implementada es:
 
 | Conjunto | Periodo | Propósito |
 | --- | --- | --- |
-| Entrenamiento (Train) | Enero–diciembre de 2024 | Entrenar los modelos |
-| Validación (Validation) | Enero–diciembre de 2025 | Evaluar configuraciones y seleccionar hiperparámetros |
-| Prueba (Test) | Enero–septiembre de 2026 | Evaluar el desempeño final sobre datos posteriores |
+| Entrenamiento (Train) | Enero de 2024 – diciembre de 2025 | Entrenar el modelo |
+| Validación (Validation) | Enero – abril de 2026 | Evaluar configuraciones y seleccionar el modelo final |
+| Prueba (Test) | Mayo – septiembre de 2026 | Evaluar una única vez el desempeño final sobre datos posteriores |
 
-Esta estrategia respeta el orden temporal de las observaciones y reduce el riesgo de fuga de información entre los conjuntos. La división temporal se implementará posteriormente durante la preparación de características y el modelado.
+Esta estrategia respeta el orden temporal de las observaciones y reduce el riesgo de fuga de información entre los conjuntos. Las características históricas se construyen utilizando únicamente información disponible antes de la hora que se desea predecir.
 
 ### Fuente y resultado real de la ingesta
 
@@ -146,3 +146,49 @@ Si el portal de MiBici modifica posteriormente alguno de los archivos fuente, el
 
 --------
 
+
+## P1: Predicción de demanda horaria por estación
+
+P1 aborda un problema de regresión cuyo objetivo es predecir cuántos viajes se iniciarán en cada estación durante una hora determinada. Cada observación representa una combinación estación–hora y la variable objetivo es `trips_started`.
+
+Para construir la serie horaria se consideran como horas activas de cada estación aquellas comprendidas entre su primera y última actividad observada como origen o destino. Dentro de este periodo, las horas sin viajes iniciados se representan con demanda igual a cero.
+
+### Características
+
+Las características utilizadas por el modelo son:
+
+- Variables de calendario: `hour_of_day`, `day_of_week`, `is_weekend` y `month`.
+- Identificador de estación: `station_id`.
+- Rezagos históricos: `lag_1`, `lag_24` y `lag_168`.
+- Medias móviles: `rolling_mean_3h` y `rolling_mean_24h`.
+- Historial disponible: `history_hours`.
+
+Los rezagos y medias móviles utilizan únicamente información anterior a la hora objetivo. En particular, las medias móviles se calculan después de desplazar la serie una hora para evitar fuga de información.
+
+### Modelos y evaluación
+
+Se utilizó como baseline un modelo estacional ingenuo que predice la demanda utilizando el valor observado 168 horas antes (`lag_168`).
+
+El modelo final es un `CatBoostRegressor` con 200 iteraciones, profundidad 6, `learning_rate=0.1` y semilla 42.
+
+| Modelo | Validation MAE | Validation RMSE |
+| --- | ---: | ---: |
+| Seasonal Naive (`lag_168`) | 0.9979 | 2.0318 |
+| CatBoostRegressor | 0.7972 | 1.4458 |
+
+Una vez seleccionado el modelo mediante el conjunto de validación, se realizó la evaluación final sobre el conjunto de prueba:
+
+| Métrica | Test |
+| --- | ---: |
+| MAE | 0.8187 |
+| RMSE | 1.4499 |
+| MAE en horas con demanda positiva | 1.3278 |
+
+Los experimentos se registran en MLflow junto con sus parámetros, métricas, versión de datos, commit de Git y artefactos.
+
+### Reproducir el entrenamiento de P1
+
+Una vez ejecutada la ingesta y con el entorno virtual activo:
+
+```powershell
+python -m mibici_mlops.modeling.train
