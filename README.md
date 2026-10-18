@@ -94,6 +94,50 @@ f4ac5ce85e317d512068af3b3707df52f0f6af303bc8ec9ad40180c3301ab5bc
 
 Si el portal de MiBici modifica posteriormente alguno de los archivos fuente, el `dataset_version` generado puede ser diferente.
 
+## Pregunta 3 (P3): Agrupamiento y Perfiles de Uso de Estaciones (Clustering)
+
+* **Objetivo de Negocio:** Identificar arquetipos funcionales de estaciones y analizar su distribución espacial en el Área Metropolitana de Guadalajara (AMG) para guiar decisiones de planeación urbana, expansión de polígonos y redimensionamiento estructural de infraestructura por parte de IMEPLAN y MiBici.
+* **Tipo de Tarea:** Aprendizaje no supervisado (Clustering).
+* **Entidad de Análisis:** Estación consolidada (`station_id`), caracterizada mediante un vector multidimensional estático derivado del historial operativo (Enero 2024 – Septiembre 2026).
+* **Horizonte:** No aplica horizonte predictivo secuencial; se analiza el comportamiento estructural agregado a nivel estación.
+
+#### 1. Ingeniería de Características (`featuresp3.py`)
+A partir de los viajes y la nomenclatura oficial, se extrajo una huella funcional de 7 variables normalizadas por estación:
+* **`ratio_am`**: Razón de viajes salientes respecto a entrantes en hora pico matutina (07:00–10:00). Valores altos identifican estaciones predominantemente de origen/residenciales.
+* **`ratio_pm`**: Razón de viajes salientes respecto a entrantes en hora pico vespertina (18:00–21:00). Valores bajos indican zonas de atracción laboral/comercial.
+* **`pct_fin_semana`**: Proporción de viajes en sábado y domingo respecto al total, separando la movilidad utilitaria de la recreativa.
+* **`pct_domingo`**: Proporción de viajes dominicales, aislando el impacto directo del corredor de la Vía RecreActiva en el AMG.
+* **`rotacion_capacidad`**: Volumen total de viajes atendidos (entradas + salidas) dividido entre la capacidad instalada de anclajes, midiendo la intensidad de uso físico.
+* **`latitude` y `longitude`**: Coordenadas geográficas WGS84 para contextualizar la continuidad y proximidad espacial de los grupos.
+
+#### 2. Modelo Baseline y Métricas de Evaluación
+* **Modelo Baseline:** $K$-Means ($k=4$, `n_init=10`, `random_state=42`) entrenado sobre las características estandarizadas con `StandardScaler`.
+* **Métricas de Evaluación:**
+  * **Silhouette Score:** Cohesión y separación entre clústeres (rango $[-1, 1]$).
+  * **Davies-Bouldin Index (DBI):** Similitud promedio entre cada clúster y su más cercano (valores menores indican mejor separación).
+  * **Inertia:** Suma de distancias al cuadrado de las muestras a su centroide más cercano.
+
+#### 3. Resultados del Experimento Base (MLflow Tracking)
+* **Experimento:** `mibici-equipo51`
+* **Run:** `p3_baseline_kmeans`
+* **Estaciones analizadas:** 471 estaciones activas.
+* **Resultados Obtenidos:**
+  * `test_silhouette_score`: **0.2492**
+  * `test_davies_bouldin_index`: **1.3458**
+  * `test_inertia`: Registrada en el run
+* **Artefacto:** Mapa geoespacial de asignación de clusters registrado en `reports/figures/p3_clusters_spatial.png` y vinculado al artefacto del run en MLflow.
+
+#### 4. Comandos de Reproducción
+Para ejecutar el pipeline de extracción de variables, entrenamiento y registro en MLflow:
+
+```bash
+# Ejecutar pipeline de P3 desde la raíz del repositorio
+python -m mibici_mlops.modeling.trainp3
+
+# Visualizar resultados en MLflow UI
+mlflow ui
+```
+
 ## Project Organization
 
 
