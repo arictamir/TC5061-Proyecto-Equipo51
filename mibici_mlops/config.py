@@ -41,3 +41,10 @@ try:
     logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
 except ModuleNotFoundError:
     pass
+
+# P1 temporal configuration
+P1_DATA_START = "2024-01-01 00:00:00"
+P1_DATA_END = "2026-09-30 23:00:00"
+
+P1_VALIDATION_START = "2026-01-01 00:00:00"
+P1_TEST_START = "2026-05-01 00:00:00"
