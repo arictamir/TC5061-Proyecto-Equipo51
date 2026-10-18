@@ -372,3 +372,4 @@ Las carpetas internas mostradas para datos, modelos y artefactos aparecen despu�
 ## Licencia
 
 El código del repositorio se publica bajo la licencia indicada en [`LICENSE`](LICENSE). Los datos pertenecen a sus fuentes originales y están sujetos a sus términos de uso.
+
