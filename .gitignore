@@ -204,6 +204,10 @@ mlflow.db
 mlflow.db-shm
 mlflow.db-wal
 
+# Modelos serializados
+models/*
+!models/.gitkeep
+
 # Serialized models
 *.cbm
 *.pkl
