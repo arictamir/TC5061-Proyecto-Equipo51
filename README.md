@@ -135,7 +135,7 @@ flowchart LR
 
 El comando unificado realiza internamente estos pasos:
 
-1. P1 lee los Parquet, crea la tabla estación-hora, construye características, evalúa la referencia estacional y entrena CatBoost.
+1. P1 lee los Parquet, crea la tabla estación-hora, construye características, evalúa el baseline estacional Seasonal Naive (lag_168), lo compara con CatBoost y registra la evaluación final.
 2. P2 ejecuta `mibici_mlops.features p2`, crea el conjunto estación-hora, compara el Dummy con la regresión logística y registra la evaluación final.
 3. P3 vuelve a leer los Parquet y la nomenclatura, crea el perfil agregado por estación y ejecuta K-Means.
 4. Las tres preguntas usan el mismo manifiesto, semilla y experimento de MLflow.
