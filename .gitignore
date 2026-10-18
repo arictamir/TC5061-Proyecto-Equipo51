@@ -198,3 +198,14 @@ cython_debug/
 mlruns/
 .mlflow/
 mlflow.db
+
+# Modelos serializados
+models/*
+!models/.gitkeep
+#*.pkl
+#*.pickle
+#*.joblib
+#*.h5
+#*.pt
+#*.pth
+#*.onnx
