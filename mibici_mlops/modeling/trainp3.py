@@ -73,8 +73,8 @@ def train_p3_baseline():
     n_stations, n_features = features_df.shape
     print(f"   Matriz construida: {n_stations} estaciones y {n_features} variables.")
 
-    print(f"3. Configurando experimento en MLflow: {config.MLFLOW_EXPERIMENT_NAME}...")
-    mlflow.set_experiment(config.MLFLOW_EXPERIMENT_NAME)
+    print(f"3. Configurando experimento en MLflow: {config.NOMBRE_EXPERIMENTO}...")
+    mlflow.set_experiment(config.NOMBRE_EXPERIMENTO)
 
     with mlflow.start_run(run_name="p3_baseline_kmeans"):
         # Tags de trazabilidad y gobernanza
@@ -117,7 +117,7 @@ def train_p3_baseline():
                 "nomenclature_file": config.NOMENCLATURE_FILE,
                 "model_type": "KMeans",
                 "n_clusters": config.P3_DEFAULT_K,
-                "random_state": config.RANDOM_STATE,
+                "random_state": config.SEMILLA_ALEATORIA,
                 "scaler": "StandardScaler",
                 "n_stations": n_stations,
                 "features_list": list(features_df.columns),

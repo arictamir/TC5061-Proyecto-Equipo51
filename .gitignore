@@ -5,6 +5,19 @@
 !/data/**/
 !/data/**/.gitkeep
 
+# MLflow
+/mlruns/
+/mlartifacts/
+/mlflow.db
+
+# Serialized models
+/models/*
+!/models/.gitkeep
+*.joblib
+*.pickle
+*.pkl
+*.skops
+
 # Mac OS-specific storage files
 .DS_Store
 
@@ -194,18 +207,22 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-# MLflow (tracking local y artefactos generados)
+# CatBoost training artifacts
+catboost_info/
+
+# MLflow local tracking
 mlruns/
-.mlflow/
+mlartifacts/
 mlflow.db
+mlflow.db-shm
+mlflow.db-wal
 
 # Modelos serializados
 models/*
 !models/.gitkeep
-#*.pkl
-#*.pickle
-#*.joblib
-#*.h5
-#*.pt
-#*.pth
-#*.onnx
+
+# Serialized models
+*.cbm
+*.pkl
+*.pickle
+*.joblib
