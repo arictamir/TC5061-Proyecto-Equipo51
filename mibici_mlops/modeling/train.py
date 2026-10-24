@@ -1,4 +1,14 @@
-"""Entrenamiento y evaluación de los modelos de P1, P2 y P3."""
+"""Entrenamiento, experimentación avanzada y registro en MLflow para P1, P2 y P3.
+
+Soporta:
+- Baselines determinísticos y estadísticos
+- Búsqueda de hiperparámetros con Nested Runs (Parent/Child)
+- Modelos candidatos con registro completo de artefactos (plots/, data/, config/)
+- Registro formal de datasets con mlflow.log_input
+- Firmas inferidas e input examples
+- Model Registry con gestión de ciclo de vida mediante Aliases (@champion / @challenger)
+- Orquestación CLI compatible con MLproject.
+"""
 
 from enum import Enum
 import json
@@ -7,21 +17,22 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
-from typing import Annotated
+from typing import Annotated, Any
 
+from catboost import CatBoostRegressor
 from loguru import logger
 import matplotlib.pyplot as plt
 import mlflow
+import mlflow.catboost
 from mlflow.models import infer_signature
 import mlflow.sklearn
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import AgglomerativeClustering, KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.dummy import DummyClassifier
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, Ridge
 from sklearn.metrics import (
-    ConfusionMatrixDisplay,
     accuracy_score,
     davies_bouldin_score,
     f1_score,
@@ -35,12 +46,12 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler
 import skops.io as sio
 import typer
 
-# Configuración centralizada y módulo de features
 from mibici_mlops.config import (
-    END_MONTH,
-    END_YEAR,
     FIGURES_DIR,
     MLFLOW_TRACKING_URI,
+    MODEL_REGISTRY_P1,
+    MODEL_REGISTRY_P2,
+    MODEL_REGISTRY_P3,
     MODELS_DIR,
     NOMBRE_EXPERIMENTO,
     NOMENCLATURE_FILE,
@@ -65,133 +76,263 @@ from mibici_mlops.config import (
     PROCESSED_DATA_DIR,
     PROJ_ROOT,
     SEMILLA_ALEATORIA,
-    START_MONTH,
-    START_YEAR,
+    TAG_QUESTION_P1,
+    TAG_QUESTION_P2,
+    TAG_QUESTION_P3,
+    TAG_STAGE_BASELINE,
+    TAG_STAGE_CANDIDATE,
+    TAG_STAGE_SEARCH,
+    TAG_TEAM,
 )
 from mibici_mlops.features import (
     COLUMNAS_CARACTERISTICAS_P2,
     build_p1_features,
     build_p1_hourly_demand,
     generate_p3_station_features,
+    preparar_dataset_p2,
+)
+from mibici_mlops.plots import (
+    plot_p1_real_vs_pred,
+    plot_p1_residuals,
+    plot_p2_confusion_matrix,
+    plot_p2_roc_curves,
+    plot_p3_cluster_distribution,
+    plot_p3_spatial_clusters,
 )
 
 plt.switch_backend("Agg")
 
+app = typer.Typer(help="Pipeline de entrenamiento y tracking avanzado para MiBici.")
 
-app = typer.Typer()
+RUTA_MANIFIESTO = PROJ_ROOT / "data_manifest.json"
+COLUMNA_OBJETIVO = "clase_riesgo"
+COLUMNA_CONJUNTO = "conjunto"
+ORDEN_CLASES = ["riesgo_vaciado", "normal", "riesgo_saturacion"]
+
+
+class NombreModelo(str, Enum):
+    DUMMY = "dummy_stratified"
+    LOGISTICA = "logistic_regression"
+
+
+class SolverRegresion(str, Enum):
+    SAGA = "saga"
+    LBFGS = "lbfgs"
+
+
 ETIQUETA_EQUIPO = "51"
+CONJUNTOS_DESARROLLO = ["entrenamiento", "validacion"]
+CONJUNTOS_FINALES = ["entrenamiento", "validacion", "prueba"]
+NOMBRE_RUN_DUMMY = "P2 - Dummy estratificado - desarrollo"
+NOMBRE_RUN_LOGISTICA = "P2 - Regresión logística - desarrollo"
+NOMBRE_RUN_FINAL = "P2 - Regresión logística - evaluación final"
+
+
+# =============================================================================
+# UTILIDADES COMUNES DE TRAZABILIDAD Y GOBERNANZA
+# =============================================================================
+
+
+def obtener_commit_git() -> str:
+    """Obtiene el hash del commit actual de Git."""
+    try:
+        resultado = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=PROJ_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return resultado.stdout.strip()
+    except Exception:  # noqa: BLE001
+        return "sin_commit_local"
+
+
+def cargar_version_datos(ruta_manifiesto: Path = RUTA_MANIFIESTO) -> str:
+    """Lee la versión SHA-256 reproducible de los datos."""
+    if not ruta_manifiesto.exists():
+        return "desconocida"
+    try:
+        manifiesto = json.loads(ruta_manifiesto.read_text(encoding="utf-8"))
+        return str(manifiesto.get("dataset_version", "desconocida"))
+    except Exception:  # noqa: BLE001
+        return "desconocida"
+
+
+def configurar_mlflow() -> str:
+    """Configura el backend store y asegura el experimento unificado."""
+    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+    client = mlflow.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+    experimento = client.get_experiment_by_name(NOMBRE_EXPERIMENTO)
+    if experimento is None:
+        exp_id = client.create_experiment(NOMBRE_EXPERIMENTO)
+        logger.info(f"Experimento '{NOMBRE_EXPERIMENTO}' creado con ID: {exp_id}")
+    else:
+        exp_id = experimento.experiment_id
+    mlflow.set_experiment(NOMBRE_EXPERIMENTO)
+    return exp_id
 
 
 def crear_etiquetas_mlflow(
-    pregunta: str,
-    tipo_tarea: str,
-    etapa: str,
-    rol_modelo: str,
-    commit_git: str,
+    question: str | None = None,
+    model_family: str | None = None,
+    stage_of_work: str | None = None,
+    commit_git: str = "sin_commit",
+    rol_modelo: str = "candidato",
+    pregunta: str | None = None,
+    tipo_tarea: str | None = None,
+    etapa: str | None = None,
+    **extra_tags: Any,
 ) -> dict[str, str]:
-    """Crea el esquema común de etiquetas para P1, P2 y P3."""
-    return {
-        "equipo": ETIQUETA_EQUIPO,
-        "pregunta": pregunta,
-        "tipo_tarea": tipo_tarea,
-        "etapa": etapa,
-        "rol_modelo": rol_modelo,
+    """Crea esquema estricto de etiquetas requerido por la rúbrica y soporta tests legacy."""
+    if pregunta is not None and question is None:
+        return {
+            "equipo": ETIQUETA_EQUIPO,
+            "pregunta": pregunta,
+            "tipo_tarea": tipo_tarea or "clasificacion",
+            "etapa": etapa or "desarrollo",
+            "rol_modelo": rol_modelo,
+            "git_commit": commit_git,
+        }
+    q = (question or "p1").lower()
+    tags = {
+        "question": q,
+        "model_family": model_family or "desconocido",
+        "stage_of_work": stage_of_work or "candidate",
+        "team": TAG_TEAM,
         "git_commit": commit_git,
+        "equipo": ETIQUETA_EQUIPO,
+        "pregunta": (pregunta or q).upper(),
+        "tipo_tarea": tipo_tarea or "modelado",
+        "etapa": etapa or (stage_of_work or "candidate"),
+        "rol_modelo": rol_modelo,
     }
+    for k, v in extra_tags.items():
+        tags[k] = str(v)
+    return tags
 
-# ======================== INICIO ENTRENAMIENTO P1 ========================
+
+def registrar_artefactos_en_subcarpetas(
+    config_dict: dict[str, Any],
+    plots_dict: dict[str, Path] | None = None,
+    dataset_df: pd.DataFrame | None = None,
+    dataset_target: str | None = None,
+    dataset_name: str | None = None,
+) -> None:
+    """Registra artefactos organizados en subcarpetas: config/, data/ y plots/."""
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+
+        # 1. Subcarpeta config/
+        config_file = temp_path / "run_config.json"
+        with config_file.open("w", encoding="utf-8") as f:
+            json.dump(config_dict, f, indent=2, default=str)
+        mlflow.log_artifact(str(config_file), artifact_path="config")
+
+        # 2. Subcarpeta data/
+        if RUTA_MANIFIESTO.exists():
+            mlflow.log_artifact(str(RUTA_MANIFIESTO), artifact_path="data")
+
+        # Registro formal del dataset en MLflow
+        if dataset_df is not None and dataset_name is not None:
+            try:
+                sample_size = min(len(dataset_df), 1000)
+                df_sample = dataset_df.head(sample_size).copy()
+                # Limpiar columnas temporales que puedan dar problema de serialización
+                for col in df_sample.columns:
+                    if pd.api.types.is_datetime64_any_dtype(df_sample[col]):
+                        df_sample[col] = df_sample[col].astype(str)
+                mlflow_dataset = mlflow.data.from_pandas(
+                    df_sample,
+                    source=str(RUTA_MANIFIESTO),
+                    targets=dataset_target,
+                    name=dataset_name,
+                )
+                mlflow.log_input(mlflow_dataset, context="training")
+            except Exception as error:  # noqa: BLE001
+                logger.warning(f"No se pudo registrar mlflow.log_input: {error}")
+
+        # 3. Subcarpeta plots/
+        if plots_dict:
+            for plot_path in plots_dict.values():
+                if plot_path.exists():
+                    mlflow.log_artifact(str(plot_path), artifact_path="plots")
 
 
-@app.command()
-def main():
-    """Train the model for P1: hourly trip demand forecasting."""
+def asignar_model_registry_con_alias(
+    run_id: str,
+    artifact_path: str,
+    model_name: str,
+    alias: str,  # "champion" o "challenger"
+    model_description: str,
+    version_description: str,
+) -> None:
+    """Registra el modelo en Model Registry y asigna el alias correspondiente."""
+    client = mlflow.MlflowClient(tracking_uri=MLFLOW_TRACKING_URI)
+    model_uri = f"runs:/{run_id}/{artifact_path}"
+    try:
+        model_version = mlflow.register_model(model_uri, model_name)
+    except Exception as e:  # noqa: BLE001
+        logger.error(f"Error al registrar {model_name}: {e}")
+        return
 
-    from catboost import CatBoostRegressor
+    try:
+        client.update_registered_model(name=model_name, description=model_description)
+    except Exception:  # noqa: BLE001, S110
+        pass
 
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(NOMBRE_EXPERIMENTO)
+    try:
+        client.update_model_version(
+            name=model_name,
+            version=model_version.version,
+            description=version_description,
+        )
+    except Exception:  # noqa: BLE001, S110
+        pass
 
-    logger.info(f"Experimento de MLflow configurado: {NOMBRE_EXPERIMENTO}")
+    try:
+        client.set_registered_model_alias(
+            name=model_name,
+            alias=alias,
+            version=model_version.version,
+        )
+        logger.success(
+            f"Model Registry: '{model_name}' v{model_version.version} asignado con alias @{alias}"
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning(f"No se pudo asignar alias @{alias} a '{model_name}': {e}")
 
-    git_commit = subprocess.check_output(
-        ["git", "rev-parse", "HEAD"],
-        text=True,
-    ).strip()
 
-    manifest_path = PROJ_ROOT / "data_manifest.json"
+# =============================================================================
+# PREGUNTA 1 (P1): DEMANDA HORARIA DE VIAJES (REGRESIÓN)
+# =============================================================================
 
-    with manifest_path.open("r", encoding="utf-8") as file:
-        data_manifest = json.load(file)
 
-    dataset_version = data_manifest["dataset_version"]
+def cargar_datos_p1() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, list[str]]:
+    """Carga y prepara los conjuntos de P1 (Train, Validation, Test) con caché en Parquet."""
+    cache_path = PROCESSED_DATA_DIR / "p1_features.parquet"
 
-    logger.info(f"Dataset version: {dataset_version}")
-
-    logger.info(f"Git commit: {git_commit}")
-
-    trips_dir = PROCESSED_DATA_DIR / "trips"
-
-    parquet_files = sorted(
-        trips_dir.glob("datos_abiertos_*.parquet")
-    )
-
-    logger.info(
-        f"Found {len(parquet_files)} processed trip files."
-    )
-
-    logger.info("Building P1 hourly demand table...")
-
-    hourly_model = build_p1_hourly_demand(
-        parquet_files=parquet_files,
-        data_start=P1_DATA_START,
-        data_end=P1_DATA_END,
-    )
-
-    logger.info(
-        f"Hourly demand table: "
-        f"{len(hourly_model):,} rows | "
-        f"{hourly_model['station_id'].nunique()} stations | "
-        f"{hourly_model['trips_started'].sum():,} trips"
-    )
-
-    logger.success("P1 hourly demand table built successfully.")
-
-    logger.info("Building P1 features...")
-
-    features_p1 = build_p1_features(hourly_model)
-
-    logger.info(
-        f"P1 feature table: "
-        f"{len(features_p1):,} rows | "
-        f"{features_p1.shape[1]} columns"
-    )
-
-    logger.success("P1 features built successfully.")
-
-    logger.info("Creating temporal train/validation/test split...")
+    if cache_path.exists():
+        logger.info(f"Cargando características P1 desde caché: {cache_path}")
+        features_p1 = pd.read_parquet(cache_path)
+    else:
+        logger.info("Construyendo características P1 desde archivos Parquet de viajes...")
+        trips_dir = PROCESSED_DATA_DIR / "trips"
+        parquet_files = sorted(trips_dir.glob("datos_abiertos_*.parquet"))
+        if not parquet_files:
+            raise FileNotFoundError("No se encontraron viajes procesados en data/processed/trips")
+        hourly_model = build_p1_hourly_demand(
+            parquet_files=parquet_files,
+            data_start=P1_DATA_START,
+            data_end=P1_DATA_END,
+        )
+        features_p1 = build_p1_features(hourly_model)
+        features_p1.to_parquet(cache_path, index=False)
+        logger.success(f"Características P1 cacheadas en: {cache_path}")
 
     train_mask = features_p1["hour"] < P1_VALIDATION_START
-
-    validation_mask = (
-        (features_p1["hour"] >= P1_VALIDATION_START)
-        & (features_p1["hour"] < P1_TEST_START)
-    )
-
+    val_mask = (features_p1["hour"] >= P1_VALIDATION_START) & (features_p1["hour"] < P1_TEST_START)
     test_mask = features_p1["hour"] >= P1_TEST_START
-
-    train_data = features_p1.loc[train_mask].copy()
-    validation_data = features_p1.loc[validation_mask].copy()
-    test_data = features_p1.loc[test_mask].copy()
-
-    logger.info(
-        f"Train: {len(train_data):,} rows | "
-        f"Validation: {len(validation_data):,} rows | "
-        f"Test: {len(test_data):,} rows"
-    )
-
-    logger.success("Temporal split created successfully.")
-
-    target = "trips_started"
 
     feature_columns = [
         "station_id",
@@ -207,391 +348,341 @@ def main():
         "history_hours",
     ]
 
-    X_train = train_data[feature_columns].copy()
-    y_train = train_data[target].copy()
-
-    X_validation = validation_data[feature_columns].copy()
-    y_validation = validation_data[target].copy()
-
-    X_test = test_data[feature_columns].copy()
-    y_test = test_data[target].copy()
-
-    logger.info(
-        f"Model matrices prepared | "
-        f"X_train: {X_train.shape} | "
-        f"X_validation: {X_validation.shape} | "
-        f"X_test: {X_test.shape}"
+    return (
+        features_p1.loc[train_mask].copy(),
+        features_p1.loc[val_mask].copy(),
+        features_p1.loc[test_mask].copy(),
+        feature_columns,
     )
 
-    logger.success("P1 model matrices prepared successfully.")
 
-    categorical_features = [
-        "station_id",
-        "hour_of_day",
-        "day_of_week",
-        "month",
-    ]
+def ejecutar_p1(
+    stage: str = "all",
+    register_models: bool = True,
+) -> None:
+    """Ejecuta baseline, búsqueda nested y candidatos para P1."""
+    configurar_mlflow()
+    commit_hash = obtener_commit_git()
+    version_datos = cargar_version_datos()
 
-    for column in categorical_features:
-        X_train[column] = X_train[column].astype(str)
-        X_validation[column] = X_validation[column].astype(str)
-        X_test[column] = X_test[column].astype(str)
+    logger.info("Cargando datos de P1...")
+    train_df, val_df, test_df, feature_cols = cargar_datos_p1()
+    target = "trips_started"
 
-    logger.info(
-        f"Categorical features prepared for CatBoost: "
-        f"{categorical_features}"
-    )
+    cat_cols = ["station_id", "hour_of_day", "day_of_week", "month"]
+    for c in cat_cols:
+        train_df[c] = train_df[c].astype(str)
+        val_df[c] = val_df[c].astype(str)
+        test_df[c] = test_df[c].astype(str)
 
-    logger.success("CatBoost input data prepared successfully.")
+    X_train, y_train = train_df[feature_cols], train_df[target]
+    X_val, y_val = val_df[feature_cols], val_df[target]
+    X_test, y_test = test_df[feature_cols], test_df[target]
 
-    logger.info("Evaluating P1 seasonal naive baseline on validation data...")
+    # 1. Baseline Run: Seasonal Naive (Lag 168)
+    if stage in ["all", "baseline"]:
+        logger.info("=== P1: Ejecutando Baseline (Seasonal Naive) ===")
+        val_pred_base = np.clip(val_df["lag_168"].to_numpy(), 0, None)
+        base_mae = float(mean_absolute_error(y_val, val_pred_base))
+        base_rmse = float(np.sqrt(mean_squared_error(y_val, val_pred_base)))
 
-    baseline_validation_predictions = validation_data["lag_168"].to_numpy()
-
-    baseline_validation_mae = mean_absolute_error(
-        y_validation,
-        baseline_validation_predictions,
-    )
-
-    baseline_validation_rmse = np.sqrt(
-        mean_squared_error(
-            y_validation,
-            baseline_validation_predictions,
-        )
-    )
-
-    logger.info(
-        "Baseline validation metrics | "
-        f"MAE: {baseline_validation_mae:.6f} | "
-        f"RMSE: {baseline_validation_rmse:.6f}"
-    )
-
-    logger.success("P1 seasonal naive baseline evaluated successfully.")
-
-    with mlflow.start_run(run_name="P1 - Baseline estacional - desarrollo"):
-
-        mlflow.log_params(
-            {
-                "modelo": "seasonal_naive_lag_168",
-                "semilla": "no_aplica",
-                "baseline_feature": "lag_168",
-                "seasonal_period_hours": 168,
-                "data_start": P1_DATA_START,
-                "data_end": P1_DATA_END,
-                "validation_start": P1_VALIDATION_START,
-                "test_start": P1_TEST_START,
-                "version_datos": dataset_version,
-            }
-        )
-
-        mlflow.log_metrics(
-            {
-                "validacion_mae": baseline_validation_mae,
-                "validacion_rmse": baseline_validation_rmse,
-            }
-        )
-
-        mlflow.set_tags(
-            crear_etiquetas_mlflow(
-                pregunta="P1",
-                tipo_tarea="regresion",
-                etapa="desarrollo",
-                rol_modelo="baseline",
-                commit_git=git_commit,
+        with mlflow.start_run(run_name="P1 - Baseline estacional - desarrollo"):
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P1,
+                    model_family="seasonal_naive",
+                    stage_of_work=TAG_STAGE_BASELINE,
+                    commit_git=commit_hash,
+                    rol_modelo="baseline",
+                )
             )
+            mlflow.log_params(
+                {
+                    "modelo": "seasonal_naive_lag_168",
+                    "baseline_feature": "lag_168",
+                    "version_datos": version_datos,
+                    "validation_start": P1_VALIDATION_START,
+                    "test_start": P1_TEST_START,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "validacion_mae": base_mae,
+                    "validacion_rmse": base_rmse,
+                }
+            )
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"baseline": "seasonal_naive", "lag": 168},
+                dataset_df=val_df[feature_cols + [target]],
+                dataset_target=target,
+                dataset_name="p1_demand_baseline",
+            )
+        logger.info(f"P1 Baseline: MAE={base_mae:.4f}, RMSE={base_rmse:.4f}")
+
+    # 2. Nested Run: Búsqueda de hiperparámetros (Grid Search)
+    if stage in ["all", "search"]:
+        logger.info("=== P1: Ejecutando Búsqueda de Hiperparámetros (Nested Runs) ===")
+        grid_p1 = [
+            {"depth": 4, "lr": 0.05, "iter": 150, "nombre": "CatBoost_depth4_lr0.05"},
+            {"depth": 6, "lr": 0.10, "iter": 200, "nombre": "CatBoost_depth6_lr0.10"},
+            {"depth": 8, "lr": 0.10, "iter": 200, "nombre": "CatBoost_depth8_lr0.10"},
+        ]
+
+        # Muestreo representativo para agilizar la búsqueda
+        sample_train = train_df.sample(
+            n=min(len(train_df), 200000), random_state=SEMILLA_ALEATORIA
         )
+        X_tr_s = sample_train[feature_cols]
+        y_tr_s = sample_train[target]
 
-        baseline_metadata = {
-            "model": "SeasonalNaive",
-            "feature": "lag_168",
-            "seasonal_period_hours": 168,
-            "description": (
-                "Predicts hourly station demand using the observed demand "
-                "from the same station 168 hours earlier."
-            ),
-        }
+        with mlflow.start_run(
+            run_name="P1 - CatBoost - Búsqueda de Hiperparámetros (Grid Search)"
+        ):
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P1,
+                    model_family="catboost",
+                    stage_of_work=TAG_STAGE_SEARCH,
+                    commit_git=commit_hash,
+                    rol_modelo="exploracion",
+                )
+            )
+            mlflow.log_params({"grid_size": len(grid_p1), "sample_size": len(sample_train)})
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            metadata_path = Path(temp_dir) / "baseline_metadata.json"
+            for config in grid_p1:
+                run_child_name = f"P1 - {config['nombre']}"
+                with mlflow.start_run(run_name=run_child_name, nested=True):
+                    mlflow.set_tags(
+                        crear_etiquetas_mlflow(
+                            question=TAG_QUESTION_P1,
+                            model_family="catboost",
+                            stage_of_work=TAG_STAGE_SEARCH,
+                            commit_git=commit_hash,
+                            rol_modelo="hijo_busqueda",
+                        )
+                    )
+                    cb = CatBoostRegressor(
+                        iterations=config["iter"],
+                        learning_rate=config["lr"],
+                        depth=config["depth"],
+                        loss_function="RMSE",
+                        random_seed=SEMILLA_ALEATORIA,
+                        verbose=0,
+                    )
+                    cb.fit(X_tr_s, y_tr_s, cat_features=cat_cols)
+                    val_pred = np.clip(cb.predict(X_val), 0, None)
+                    v_mae = float(mean_absolute_error(y_val, val_pred))
+                    v_rmse = float(np.sqrt(mean_squared_error(y_val, val_pred)))
 
-            with metadata_path.open("w", encoding="utf-8") as file:
-                json.dump(baseline_metadata, file, indent=2)
+                    mlflow.log_params(config)
+                    mlflow.log_metrics({"validacion_mae": v_mae, "validacion_rmse": v_rmse})
 
-            mlflow.log_artifact(
-                str(metadata_path),
-                artifact_path="baseline",
+            # Añadir modelo alternativo en búsqueda: Ridge
+            with mlflow.start_run(run_name="P1 - Ridge (alpha=1.0)", nested=True):
+                mlflow.set_tags(
+                    crear_etiquetas_mlflow(
+                        question=TAG_QUESTION_P1,
+                        model_family="ridge",
+                        stage_of_work=TAG_STAGE_SEARCH,
+                        commit_git=commit_hash,
+                    )
+                )
+                num_cols = [c for c in feature_cols if c not in cat_cols]
+                ridge = Ridge(alpha=1.0)
+                ridge.fit(X_tr_s[num_cols].fillna(0), y_tr_s)
+                val_pred_r = np.clip(ridge.predict(X_val[num_cols].fillna(0)), 0, None)
+                mlflow.log_params({"alpha": 1.0, "family": "ridge"})
+                mlflow.log_metrics(
+                    {
+                        "validacion_mae": float(mean_absolute_error(y_val, val_pred_r)),
+                        "validacion_rmse": float(np.sqrt(mean_squared_error(y_val, val_pred_r))),
+                    }
+                )
+
+    # 3. Modelos Candidatos (Champion y Challenger con Test Set y Artefactos)
+    if stage in ["all", "candidate"]:
+        logger.info("=== P1: Evaluando Candidatos Finales y Artefactos ===")
+
+        # Champion: depth=6, lr=0.10, iter=200
+        champ_run_id = None
+        challenger_run_id = None
+
+        with mlflow.start_run(
+            run_name="P1 - CatBoost - Candidato Champion (depth=6, lr=0.10)"
+        ) as r_champ:
+            champ_run_id = r_champ.info.run_id
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P1,
+                    model_family="catboost",
+                    stage_of_work=TAG_STAGE_CANDIDATE,
+                    commit_git=commit_hash,
+                    rol_modelo="champion",
+                )
+            )
+            cb_champ = CatBoostRegressor(
+                iterations=200,
+                learning_rate=0.10,
+                depth=6,
+                loss_function="RMSE",
+                random_seed=SEMILLA_ALEATORIA,
+                verbose=0,
+            )
+            cb_champ.fit(X_train, y_train, cat_features=cat_cols)
+
+            val_p = np.clip(cb_champ.predict(X_val), 0, None)
+            test_p = np.clip(cb_champ.predict(X_test), 0, None)
+
+            c_val_mae = float(mean_absolute_error(y_val, val_p))
+            c_val_rmse = float(np.sqrt(mean_squared_error(y_val, val_p)))
+            c_test_mae = float(mean_absolute_error(y_test, test_p))
+            c_test_rmse = float(np.sqrt(mean_squared_error(y_test, test_p)))
+            pos_mask = y_test > 0
+            c_test_mae_pos = float(mean_absolute_error(y_test[pos_mask], test_p[pos_mask]))
+
+            mlflow.log_params(
+                {
+                    "modelo": "catboost_regressor",
+                    "depth": 6,
+                    "learning_rate": 0.10,
+                    "iterations": 200,
+                    "semilla": SEMILLA_ALEATORIA,
+                    "version_datos": version_datos,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "validacion_mae": c_val_mae,
+                    "validacion_rmse": c_val_rmse,
+                    "prueba_mae": c_test_mae,
+                    "prueba_rmse": c_test_rmse,
+                    "prueba_mae_positiva": c_test_mae_pos,
+                }
             )
 
-        logger.success("P1 seasonal naive baseline logged to MLflow.")
-
-    with mlflow.start_run(run_name="P1 - CatBoost - evaluación final"):
-
-        mlflow.log_params(
-            {
-                "modelo": "catboost_regressor",
-                "iterations": 200,
-                "learning_rate": 0.1,
-                "depth": 6,
-                "loss_function": "RMSE",
-                "semilla": SEMILLA_ALEATORIA,
-                "data_start": P1_DATA_START,
-                "data_end": P1_DATA_END,
-                "validation_start": P1_VALIDATION_START,
-                "test_start": P1_TEST_START,
-                "version_datos": dataset_version,
-            }
-        )
-
-        mlflow.set_tags(
-            crear_etiquetas_mlflow(
-                pregunta="P1",
-                tipo_tarea="regresion",
-                etapa="evaluacion_final",
-                rol_modelo="final",
-                commit_git=git_commit,
+            # Generar y registrar gráficas de desempeño
+            plot_dir = FIGURES_DIR / "p1_champion"
+            plot_rvp = plot_p1_real_vs_pred(
+                y_test.to_numpy(),
+                test_p,
+                plot_dir / "real_vs_predicho.png",
+                title="P1 Champion: Demanda Real vs. Predicha (Test)",
             )
-        )
-
-        logger.info("MLflow run started and metadata logged.")
-
-        logger.info("Training final P1 CatBoost model...")
-
-        model = CatBoostRegressor(
-            iterations=200,
-            learning_rate=0.1,
-            depth=6,
-            loss_function="RMSE",
-            random_seed=SEMILLA_ALEATORIA,
-            verbose=50,
-        )
-
-        model.fit(
-            X_train,
-            y_train,
-            cat_features=categorical_features,
-        )
-
-        logger.success("Final P1 CatBoost model trained successfully.")
-
-        logger.info("Evaluating P1 model on validation data...")
-
-        validation_predictions = model.predict(X_validation)
-
-        # Trip demand cannot be negative.
-        validation_predictions = np.clip(validation_predictions, 0, None)
-
-        validation_mae = mean_absolute_error(
-            y_validation,
-            validation_predictions,
-        )
-
-        validation_rmse = np.sqrt(
-            mean_squared_error(
-                y_validation,
-                validation_predictions,
+            plot_res = plot_p1_residuals(
+                y_test.to_numpy(),
+                test_p,
+                plot_dir / "grafico_residuales.png",
+                title="P1 Champion: Residuales vs. Predicho (Test)",
             )
-        )
 
-        positive_mask = y_validation > 0
-
-        validation_mae_positive = mean_absolute_error(
-            y_validation[positive_mask],
-            validation_predictions[positive_mask],
-        )
-
-        logger.info(
-            f"Validation metrics | "
-            f"MAE: {validation_mae:.6f} | "
-            f"RMSE: {validation_rmse:.6f} | "
-            f"MAE positive demand: {validation_mae_positive:.6f}"
-        )
-
-        logger.success("P1 validation evaluation completed successfully.")
-
-        logger.info("Evaluating P1 model on test data...")
-
-        test_predictions = model.predict(X_test)
-
-        # Trip demand cannot be negative.
-        test_predictions = np.clip(test_predictions, 0, None)
-
-        test_mae = mean_absolute_error(
-            y_test,
-            test_predictions,
-        )
-
-        test_rmse = np.sqrt(
-            mean_squared_error(
-                y_test,
-                test_predictions,
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"model": "CatBoost", "depth": 6, "lr": 0.1, "iterations": 200},
+                plots_dict={"real_vs_pred": plot_rvp, "residuales": plot_res},
+                dataset_df=test_df[feature_cols + [target]],
+                dataset_target=target,
+                dataset_name="p1_demand_test",
             )
-        )
 
-        positive_test_mask = y_test > 0
-
-        test_mae_positive = mean_absolute_error(
-            y_test[positive_test_mask],
-            test_predictions[positive_test_mask],
-        )
-
-        logger.info(
-            f"Test metrics | "
-            f"MAE: {test_mae:.6f} | "
-            f"RMSE: {test_rmse:.6f} | "
-            f"MAE positive demand: {test_mae_positive:.6f}"
-        )
-
-        logger.success("P1 test evaluation completed successfully.")
-
-        mlflow.log_metrics(
-            {
-                "validacion_mae": validation_mae,
-                "validacion_rmse": validation_rmse,
-                "validacion_mae_positiva": validation_mae_positive,
-                "prueba_mae": test_mae,
-                "prueba_rmse": test_rmse,
-                "prueba_mae_positiva": test_mae_positive,
-            }
-        )
-
-        logger.info("Validation and test metrics logged to MLflow.")
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            model_path = Path(temp_dir) / "p1_catboost_model.cbm"
-            model.save_model(str(model_path))
-
-            mlflow.log_artifact(
-                str(model_path),
+            # Firma e input example
+            input_ex = X_test.head(5)
+            sig = infer_signature(input_ex, cb_champ.predict(input_ex))
+            mlflow.catboost.log_model(
+                cb_champ,
                 artifact_path="model",
+                signature=sig,
+                input_example=input_ex,
             )
 
-        logger.info("CatBoost model artifact logged to MLflow.")
+        # Challenger: depth=4, lr=0.05, iter=150
+        with mlflow.start_run(
+            run_name="P1 - CatBoost - Candidato Challenger (depth=4, lr=0.05)"
+        ) as r_chall:
+            challenger_run_id = r_chall.info.run_id
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P1,
+                    model_family="catboost",
+                    stage_of_work=TAG_STAGE_CANDIDATE,
+                    commit_git=commit_hash,
+                    rol_modelo="challenger",
+                )
+            )
+            cb_chall = CatBoostRegressor(
+                iterations=150,
+                learning_rate=0.05,
+                depth=4,
+                loss_function="RMSE",
+                random_seed=SEMILLA_ALEATORIA,
+                verbose=0,
+            )
+            cb_chall.fit(X_train, y_train, cat_features=cat_cols)
+
+            val_p_ch = np.clip(cb_chall.predict(X_val), 0, None)
+            test_p_ch = np.clip(cb_chall.predict(X_test), 0, None)
+
+            mlflow.log_params(
+                {
+                    "modelo": "catboost_regressor",
+                    "depth": 4,
+                    "learning_rate": 0.05,
+                    "iterations": 150,
+                    "semilla": SEMILLA_ALEATORIA,
+                    "version_datos": version_datos,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "validacion_mae": float(mean_absolute_error(y_val, val_p_ch)),
+                    "validacion_rmse": float(np.sqrt(mean_squared_error(y_val, val_p_ch))),
+                    "prueba_mae": float(mean_absolute_error(y_test, test_p_ch)),
+                    "prueba_rmse": float(np.sqrt(mean_squared_error(y_test, test_p_ch))),
+                }
+            )
+
+            plot_dir_ch = FIGURES_DIR / "p1_challenger"
+            plot_rvp_ch = plot_p1_real_vs_pred(
+                y_test.to_numpy(),
+                test_p_ch,
+                plot_dir_ch / "real_vs_predicho.png",
+                title="P1 Challenger: Demanda Real vs. Predicha",
+            )
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"model": "CatBoost", "depth": 4, "lr": 0.05, "iterations": 150},
+                plots_dict={"real_vs_pred": plot_rvp_ch},
+            )
+            sig_ch = infer_signature(input_ex, cb_chall.predict(input_ex))
+            mlflow.catboost.log_model(
+                cb_chall,
+                artifact_path="model",
+                signature=sig_ch,
+                input_example=input_ex,
+            )
+
+        # Registro en Model Registry con Aliases
+        if register_models and champ_run_id and challenger_run_id:
+            logger.info("Registrando modelos de P1 en Model Registry...")
+            asignar_model_registry_con_alias(
+                run_id=champ_run_id,
+                artifact_path="model",
+                model_name=MODEL_REGISTRY_P1,
+                alias="champion",
+                model_description="Modelo de regresión para predicción de demanda horaria en MiBici.",
+                version_description=f"Champion: CatBoost depth=6, lr=0.10. Commit: {commit_hash}",
+            )
+            asignar_model_registry_con_alias(
+                run_id=challenger_run_id,
+                artifact_path="model",
+                model_name=MODEL_REGISTRY_P1,
+                alias="challenger",
+                model_description="Modelo de regresión para predicción de demanda horaria en MiBici.",
+                version_description=f"Challenger: CatBoost depth=4, lr=0.05. Commit: {commit_hash}",
+            )
 
 
-# ======================== INICIO ENTRENAMIENTO P2 ========================
-COLUMNA_OBJETIVO = "clase_riesgo"
-COLUMNA_CONJUNTO = "conjunto"
-ORDEN_CLASES = ["riesgo_vaciado", "normal", "riesgo_saturacion"]
-CONJUNTOS_DESARROLLO = ["entrenamiento", "validacion"]
-CONJUNTOS_FINALES = ["entrenamiento", "validacion", "prueba"]
-RUTA_MANIFIESTO = PROJ_ROOT / "data_manifest.json"
-
-NOMBRE_RUN_DUMMY = "P2 - Dummy estratificado - desarrollo"
-NOMBRE_RUN_LOGISTICA = "P2 - Regresión logística - desarrollo"
-NOMBRE_RUN_FINAL = "P2 - Regresión logística - evaluación final"
-
-
-class NombreModelo(str, Enum):
-    """Nombres aceptados por el comando de evaluación final."""
-
-    DUMMY = "dummy_stratified"
-    LOGISTICA = "logistic_regression"
-
-
-class SolverRegresion(str, Enum):
-    """Solvers permitidos para la regresión logística de P2."""
-
-    SAGA = "saga"
-    LBFGS = "lbfgs"
-
-
-def configurar_mlflow() -> None:
-    """Configura el servidor y el experimento compartido del equipo."""
-    mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(NOMBRE_EXPERIMENTO)
-
-
-def cargar_version_datos(ruta_manifiesto: Path = RUTA_MANIFIESTO) -> str:
-    """Lee la versión reproducible de los archivos fuente."""
-    if not ruta_manifiesto.exists():
-        raise FileNotFoundError(f"No existe el manifiesto: {ruta_manifiesto}")
-
-    manifiesto = json.loads(ruta_manifiesto.read_text(encoding="utf-8"))
-    version_datos = manifiesto.get("dataset_version")
-
-    if not version_datos:
-        raise ValueError("El manifiesto no contiene dataset_version.")
-
-    return str(version_datos)
-
-
-def obtener_commit_git() -> str:
-    """Obtiene el commit que produjo la corrida de MLflow."""
-    try:
-        resultado = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=PROJ_ROOT,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except (FileNotFoundError, subprocess.CalledProcessError) as error:
-        raise RuntimeError("No fue posible obtener el commit actual de Git.") from error
-
-    commit = resultado.stdout.strip()
-    if not commit:
-        raise RuntimeError("Git devolvió un commit vacío.")
-    return commit
-
-
-def crear_parametros_mlflow(
-    nombre_modelo: NombreModelo,
-    version_datos: str,
-    conteos: dict[str, int],
-    semilla: int,
-    c: float,
-    solver: SolverRegresion,
-    max_iter: int,
-) -> dict[str, str | int | float]:
-    """Reúne los parámetros necesarios para reproducir una corrida."""
-    parametros: dict[str, str | int | float] = {
-        "modelo": nombre_modelo.value,
-        "version_datos": version_datos,
-        "semilla": semilla,
-        "horizonte_horas": P2_HORIZONTE_HORAS,
-        "cuantil_vaciado": P2_CUANTIL_VACIADO,
-        "cuantil_saturacion": P2_CUANTIL_SATURACION,
-        "umbral_vaciado": P2_UMBRAL_VACIADO,
-        "umbral_saturacion": P2_UMBRAL_SATURACION,
-        "inicio_entrenamiento": P2_INICIO_ENTRENAMIENTO,
-        "fin_entrenamiento_exclusivo": P2_FIN_ENTRENAMIENTO,
-        "inicio_validacion": P2_INICIO_VALIDACION,
-        "fin_validacion_exclusivo": P2_FIN_VALIDACION,
-        "inicio_prueba": P2_INICIO_PRUEBA,
-        "fin_prueba_exclusivo": P2_FIN_PRUEBA,
-        "numero_caracteristicas": len(COLUMNAS_CARACTERISTICAS_P2),
-    }
-    parametros.update(
-        {
-            f"filas_{conjunto}": cantidad
-            for conjunto, cantidad in conteos.items()
-        }
-    )
-
-    if nombre_modelo == NombreModelo.DUMMY:
-        parametros["strategy"] = "stratified"
-    else:
-        parametros.update(
-            {
-                "C": c,
-                "solver": solver.value,
-                "max_iter": max_iter,
-                "class_weight": "balanced",
-            }
-        )
-
-    return parametros
-
-
-def prefijar_metricas_mlflow(
-    conjunto: str,
-    metricas: dict[str, float],
-) -> dict[str, float]:
-    """Agrega el conjunto al nombre de cada métrica registrada."""
-    return {
-        f"{conjunto}_{nombre}": valor
-        for nombre, valor in metricas.items()
-    }
+# =============================================================================
+# =============================================================================
+# PREGUNTA 2 (P2): CLASIFICACIÓN DE RIESGO OPERATIVO (MULTICLASE)
+# =============================================================================
 
 
 def cargar_dataset(
@@ -644,12 +735,31 @@ def separar_variables(dataset: pd.DataFrame) -> dict[str, tuple[pd.DataFrame, pd
     return separados
 
 
+def cargar_datos_p2() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Carga y particiona el dataset de P2 reutilizando cargar_dataset."""
+    p2_path = P2_DIR / "dataset_p2.parquet"
+    if not p2_path.exists():
+        logger.info("Dataset P2 no existe, construyendo con preparar_dataset_p2...")
+        trips_dir = PROCESSED_DATA_DIR / "trips"
+        nom_file = (
+            PROCESSED_DATA_DIR / "nomenclature" / NOMENCLATURE_FILE.replace(".csv", ".parquet")
+        )
+        rutas_viajes = sorted(trips_dir.glob("datos_abiertos_*.parquet"))
+        dataset_p2 = preparar_dataset_p2(rutas_viajes, nom_file)
+        p2_path.parent.mkdir(parents=True, exist_ok=True)
+        dataset_p2.to_parquet(p2_path, index=False)
+
+    df = cargar_dataset(p2_path, CONJUNTOS_FINALES)
+    train_df = df[df[COLUMNA_CONJUNTO] == "entrenamiento"].copy()
+    val_df = df[df[COLUMNA_CONJUNTO] == "validacion"].copy()
+    test_df = df[df[COLUMNA_CONJUNTO] == "prueba"].copy()
+
+    return train_df, val_df, test_df
+
+
 def crear_dummy(semilla: int = SEMILLA_ALEATORIA) -> DummyClassifier:
-    """Crea el baseline aleatorio estratificado y reproducible."""
-    return DummyClassifier(
-        strategy="stratified",
-        random_state=semilla,
-    )
+    """Crea el clasificador de referencia más simple y reproducible."""
+    return DummyClassifier(strategy="stratified", random_state=semilla)
 
 
 def crear_regresion_logistica(
@@ -658,12 +768,10 @@ def crear_regresion_logistica(
     solver: SolverRegresion = SolverRegresion.SAGA,
     max_iter: int = 100,
 ) -> Pipeline:
-    """Crea el primer modelo candidato con preprocesamiento incluido."""
+    """Crea el clasificador candidato con preprocesamiento completo para P2."""
     columnas_categoricas = ["estacion_id"]
     columnas_numericas = [
-        columna
-        for columna in COLUMNAS_CARACTERISTICAS_P2
-        if columna not in columnas_categoricas
+        columna for columna in COLUMNAS_CARACTERISTICAS_P2 if columna not in columnas_categoricas
     ]
     preprocesamiento = ColumnTransformer(
         transformers=[
@@ -678,7 +786,7 @@ def crear_regresion_logistica(
     )
     clasificador = LogisticRegression(
         C=c,
-        solver=solver.value,
+        solver=solver.value if isinstance(solver, SolverRegresion) else solver,
         max_iter=max_iter,
         class_weight="balanced",
         random_state=semilla,
@@ -691,6 +799,21 @@ def crear_regresion_logistica(
     )
 
 
+def crear_pipeline_p2(
+    c: float = 1.0,
+    solver: str | SolverRegresion = SolverRegresion.SAGA,
+    max_iter: int = 100,
+) -> Pipeline:
+    """Crea el pipeline scikit-learn para P2 reutilizando crear_regresion_logistica."""
+    solver_enum = SolverRegresion(solver) if isinstance(solver, str) else solver
+    return crear_regresion_logistica(
+        semilla=SEMILLA_ALEATORIA,
+        c=c,
+        solver=solver_enum,
+        max_iter=max_iter,
+    )
+
+
 def crear_modelo(
     nombre: NombreModelo,
     semilla: int = SEMILLA_ALEATORIA,
@@ -698,12 +821,12 @@ def crear_modelo(
     solver: SolverRegresion = SolverRegresion.SAGA,
     max_iter: int = 100,
 ) -> DummyClassifier | Pipeline:
-    """Crea uno de los dos modelos permitidos para P2."""
+    """Fábrica para instanciar el modelo solicitado."""
     if nombre == NombreModelo.DUMMY:
         return crear_dummy(semilla)
     if nombre == NombreModelo.LOGISTICA:
         return crear_regresion_logistica(semilla, c, solver, max_iter)
-    raise ValueError(f"Modelo no reconocido: {nombre}")
+    raise ValueError(f"Modelo desconocido: {nombre}")
 
 
 def calcular_metricas(y_real: pd.Series, y_predicha: pd.Series) -> dict[str, float]:
@@ -734,13 +857,18 @@ def calcular_metricas(y_real: pd.Series, y_predicha: pd.Series) -> dict[str, flo
     }
 
 
+def calcular_metricas_p2(y_true: pd.Series, y_pred: pd.Series) -> dict[str, float]:
+    """Calcula las métricas multiclase de P2 reutilizando calcular_metricas."""
+    return calcular_metricas(y_true, y_pred)
+
+
 def evaluar_modelo(
     modelo: DummyClassifier | Pipeline,
     caracteristicas: pd.DataFrame,
     objetivo: pd.Series,
 ) -> tuple[dict[str, float], pd.Series]:
-    """Genera predicciones y calcula las métricas para un conjunto."""
-    prediccion = pd.Series(modelo.predict(caracteristicas), index=objetivo.index)
+    """Genera predicciones y calcula métricas en un único conjunto."""
+    prediccion = pd.Series(modelo.predict(caracteristicas), index=caracteristicas.index)
     return calcular_metricas(objetivo, prediccion), prediccion
 
 
@@ -750,23 +878,8 @@ def guardar_matriz_confusion(
     titulo: str,
     ruta: Path,
 ) -> None:
-    """Guarda una matriz normalizada para facilitar su lectura."""
-    ruta.parent.mkdir(parents=True, exist_ok=True)
-    figura, eje = plt.subplots(figsize=(7, 6))
-    ConfusionMatrixDisplay.from_predictions(
-        objetivo,
-        prediccion,
-        labels=ORDEN_CLASES,
-        normalize="true",
-        values_format=".2f",
-        cmap="Blues",
-        xticks_rotation=20,
-        ax=eje,
-    )
-    eje.set_title(titulo)
-    figura.tight_layout()
-    figura.savefig(ruta, dpi=150)
-    plt.close(figura)
+    """Guarda una matriz normalizada utilizando plot_p2_confusion_matrix de plots.py."""
+    plot_p2_confusion_matrix(objetivo, prediccion, ruta, titulo, normalize="true")
 
 
 def convertir_metricas_en_fila(
@@ -783,13 +896,72 @@ def convertir_metricas_en_fila(
 
 
 def seleccionar_mejor_modelo(metricas: pd.DataFrame) -> str:
-    """Selecciona exclusivamente mediante F1 macro de validación."""
+    """Selecciona el modelo con mejor F1-macro en validación."""
     validacion = metricas[metricas["conjunto"] == "validacion"]
+    mejor_fila = validacion.sort_values("f1_macro", ascending=False).iloc[0]
+    return str(mejor_fila["modelo"])
 
-    if validacion.empty:
-        raise ValueError("No hay métricas de validación para seleccionar un modelo.")
 
-    return str(validacion.loc[validacion["f1_macro"].idxmax(), "modelo"])
+def mostrar_metricas(metricas: pd.DataFrame) -> None:
+    """Muestra en consola una tabla corta de resultados."""
+    columnas_metricas = [
+        "accuracy",
+        "f1_macro",
+        "recall_vaciado",
+        "recall_saturacion",
+        "gmean",
+    ]
+    tabla = metricas.copy()
+    tabla[columnas_metricas] = tabla[columnas_metricas].round(4)
+    typer.echo(tabla.to_string(index=False))
+
+
+def prefijar_metricas_mlflow(
+    conjunto: str,
+    metricas: dict[str, float],
+) -> dict[str, float]:
+    """Agrega el conjunto al nombre de cada métrica registrada."""
+    return {f"{conjunto}_{nombre}": valor for nombre, valor in metricas.items()}
+
+
+def crear_parametros_mlflow(
+    nombre_modelo: NombreModelo,
+    version_datos: str,
+    conteos: dict[str, int],
+    semilla: int,
+    c: float,
+    solver: SolverRegresion,
+    max_iter: int,
+) -> dict[str, str | int | float]:
+    """Crea un diccionario con los parámetros que permiten reproducir el entrenamiento."""
+    parametros: dict[str, str | int | float] = {
+        "version_datos": version_datos,
+        "semilla": semilla,
+        "modelo": nombre_modelo.value,
+        "filas_entrenamiento": conteos["entrenamiento"],
+        "filas_validacion": conteos["validacion"],
+        "inicio_entrenamiento": P2_INICIO_ENTRENAMIENTO,
+        "fin_entrenamiento_exclusivo": P2_FIN_ENTRENAMIENTO,
+        "inicio_validacion": P2_INICIO_VALIDACION,
+        "fin_validacion_exclusivo": P2_FIN_VALIDACION,
+        "inicio_prueba": P2_INICIO_PRUEBA,
+        "fin_prueba_exclusivo": P2_FIN_PRUEBA,
+        "horizonte_horas": P2_HORIZONTE_HORAS,
+        "cuantil_vaciado": P2_CUANTIL_VACIADO,
+        "cuantil_saturacion": P2_CUANTIL_SATURACION,
+        "umbral_vaciado": P2_UMBRAL_VACIADO,
+        "umbral_saturacion": P2_UMBRAL_SATURACION,
+    }
+
+    if nombre_modelo == NombreModelo.DUMMY:
+        parametros["estrategia"] = "stratified"
+    elif nombre_modelo == NombreModelo.LOGISTICA:
+        parametros["c"] = c
+        parametros["solver"] = solver.value if isinstance(solver, SolverRegresion) else solver
+        parametros["max_iter"] = max_iter
+        parametros["class_weight"] = "balanced"
+
+    return parametros
 
 
 def entrenar_y_evaluar_desarrollo(
@@ -805,10 +977,7 @@ def entrenar_y_evaluar_desarrollo(
     """Compara Dummy y regresión logística sin consultar prueba."""
     conjuntos = separar_variables(dataset)
     x_entrenamiento, y_entrenamiento = conjuntos["entrenamiento"]
-    conteos = {
-        conjunto: len(objetivo)
-        for conjunto, (_, objetivo) in conjuntos.items()
-    }
+    conteos = {conjunto: len(objetivo) for conjunto, (_, objetivo) in conjuntos.items()}
     resultados = []
     nombres_run = {
         NombreModelo.DUMMY: NOMBRE_RUN_DUMMY,
@@ -817,11 +986,7 @@ def entrenar_y_evaluar_desarrollo(
 
     for nombre in [NombreModelo.DUMMY, NombreModelo.LOGISTICA]:
         with mlflow.start_run(run_name=nombres_run[nombre]):
-            rol_modelo = (
-                "baseline"
-                if nombre == NombreModelo.DUMMY
-                else "candidato"
-            )
+            rol_modelo = "baseline" if nombre == NombreModelo.DUMMY else "candidato"
             mlflow.set_tags(
                 crear_etiquetas_mlflow(
                     pregunta="P2",
@@ -842,35 +1007,20 @@ def entrenar_y_evaluar_desarrollo(
                     max_iter,
                 )
             )
-            mlflow.log_artifact(
-                str(RUTA_MANIFIESTO),
-                artifact_path="reproducibilidad",
-            )
-
-            logger.info(f"Entrenando {nombre.value}.")
             modelo = crear_modelo(nombre, semilla, c, solver, max_iter)
             modelo.fit(x_entrenamiento, y_entrenamiento)
 
             for conjunto in CONJUNTOS_DESARROLLO:
                 caracteristicas, objetivo = conjuntos[conjunto]
-                metricas, prediccion = evaluar_modelo(
-                    modelo,
-                    caracteristicas,
-                    objetivo,
-                )
-                resultados.append(
-                    convertir_metricas_en_fila(nombre.value, conjunto, metricas)
-                )
+                metricas, prediccion = evaluar_modelo(modelo, caracteristicas, objetivo)
                 mlflow.log_metrics(prefijar_metricas_mlflow(conjunto, metricas))
+                resultados.append(convertir_metricas_en_fila(nombre.value, conjunto, metricas))
 
-                ruta_matriz = (
-                    directorio_figuras
-                    / f"matriz_{nombre.value}_{conjunto}.png"
-                )
+                ruta_matriz = directorio_figuras / f"matriz_{nombre.value}_{conjunto}.png"
                 guardar_matriz_confusion(
                     objetivo,
                     prediccion,
-                    f"{nombre.value} - {conjunto}",
+                    f"Matriz {nombre.value} - {conjunto}",
                     ruta_matriz,
                 )
                 mlflow.log_artifact(
@@ -913,18 +1063,618 @@ def evaluar_modelo_final(
     return modelo, pd.DataFrame(resultados)
 
 
-def mostrar_metricas(metricas: pd.DataFrame) -> None:
-    """Muestra en consola una tabla corta de resultados."""
-    columnas_metricas = [
-        "accuracy",
-        "f1_macro",
-        "recall_vaciado",
-        "recall_saturacion",
-        "gmean",
-    ]
-    tabla = metricas.copy()
-    tabla[columnas_metricas] = tabla[columnas_metricas].round(4)
-    typer.echo(tabla.to_string(index=False))
+def ejecutar_p2(stage: str = "all", register_models: bool = True) -> None:
+    """Ejecuta baseline, búsqueda nested y candidatos para P2."""
+    configurar_mlflow()
+    commit_hash = obtener_commit_git()
+    version_datos = cargar_version_datos()
+
+    logger.info("Cargando datos de P2...")
+    train_df, val_df, test_df = cargar_datos_p2()
+    X_train, y_train = (
+        train_df[COLUMNAS_CARACTERISTICAS_P2],
+        train_df[COLUMNA_OBJETIVO].astype(str),
+    )
+    X_val, y_val = val_df[COLUMNAS_CARACTERISTICAS_P2], val_df[COLUMNA_OBJETIVO].astype(str)
+    X_test, y_test = test_df[COLUMNAS_CARACTERISTICAS_P2], test_df[COLUMNA_OBJETIVO].astype(str)
+
+    # 1. Baseline: DummyClassifier
+    if stage in ["all", "baseline"]:
+        logger.info("=== P2: Ejecutando Baseline (Dummy Estratificado) ===")
+        dummy = DummyClassifier(strategy="stratified", random_state=SEMILLA_ALEATORIA)
+        dummy.fit(X_train, y_train)
+        pred_val = dummy.predict(X_val)
+        m_val = calcular_metricas_p2(y_val, pd.Series(pred_val, index=y_val.index))
+
+        with mlflow.start_run(run_name="P2 - Dummy estratificado - desarrollo"):
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P2,
+                    model_family="dummy",
+                    stage_of_work=TAG_STAGE_BASELINE,
+                    commit_git=commit_hash,
+                    rol_modelo="baseline",
+                )
+            )
+            mlflow.log_params(
+                {
+                    "modelo": "dummy_stratified",
+                    "strategy": "stratified",
+                    "version_datos": version_datos,
+                    "semilla": SEMILLA_ALEATORIA,
+                }
+            )
+            for k, v in m_val.items():
+                mlflow.log_metric(f"validacion_{k}", v)
+
+            p_base_cm = plot_p2_confusion_matrix(
+                y_val,
+                pred_val,
+                ORDEN_CLASES,
+                FIGURES_DIR / "p2_baseline_cm.png",
+                "P2 Baseline Matriz de Confusión",
+            )
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"modelo": "dummy_stratified"},
+                plots_dict={"confusion_matrix": p_base_cm},
+            )
+        logger.info(f"P2 Baseline: F1={m_val['f1_macro']:.4f}, Acc={m_val['accuracy']:.4f}")
+
+    # 2. Nested Run: Búsqueda de regularización C
+    if stage in ["all", "search"]:
+        logger.info("=== P2: Ejecutando Búsqueda de Regularización C (Nested Runs) ===")
+        c_values = [0.01, 0.1, 1.0, 10.0]
+
+        # Muestreo estratificado para exploración rápida
+        sample_size = min(len(train_df), 150000)
+        idx_sample = (
+            train_df.groupby(COLUMNA_OBJETIVO, group_keys=False)
+            .apply(
+                lambda x: x.sample(
+                    n=int(sample_size * len(x) / len(train_df)), random_state=SEMILLA_ALEATORIA
+                )
+            )
+            .index
+        )
+        X_tr_s = X_train.loc[idx_sample]
+        y_tr_s = y_train.loc[idx_sample]
+
+        with mlflow.start_run(
+            run_name="P2 - Logistic Regression - Búsqueda Regularización C (Grid Search)"
+        ):
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P2,
+                    model_family="logistic_regression",
+                    stage_of_work=TAG_STAGE_SEARCH,
+                    commit_git=commit_hash,
+                    rol_modelo="exploracion",
+                )
+            )
+            mlflow.log_params({"grid_c_values": c_values, "search_sample_size": len(X_tr_s)})
+
+            for c_val in c_values:
+                with mlflow.start_run(
+                    run_name=f"P2 - Logistic Regression (C={c_val})", nested=True
+                ):
+                    mlflow.set_tags(
+                        crear_etiquetas_mlflow(
+                            question=TAG_QUESTION_P2,
+                            model_family="logistic_regression",
+                            stage_of_work=TAG_STAGE_SEARCH,
+                            commit_git=commit_hash,
+                            rol_modelo="hijo_busqueda",
+                        )
+                    )
+                    pipe_s = crear_pipeline_p2(c=c_val, max_iter=40)
+                    pipe_s.fit(X_tr_s, y_tr_s)
+                    p_val_s = pipe_s.predict(X_val)
+                    m_s = calcular_metricas_p2(y_val, pd.Series(p_val_s, index=y_val.index))
+
+                    mlflow.log_params({"C": c_val, "solver": "saga", "max_iter": 40})
+                    for k, v in m_s.items():
+                        mlflow.log_metric(f"validacion_{k}", v)
+
+    # 3. Modelos Candidatos (Champion y Challenger con Test Set y Artefactos)
+    if stage in ["all", "candidate"]:
+        logger.info("=== P2: Evaluando Candidatos Finales y Artefactos ===")
+        champ_run_id = None
+        challenger_run_id = None
+
+        # Champion: C=1.0 (entrenamiento con conjunto completo)
+        with mlflow.start_run(
+            run_name="P2 - Regresión Logística - Candidato Champion (C=1.0)"
+        ) as r_champ:
+            champ_run_id = r_champ.info.run_id
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P2,
+                    model_family="logistic_regression",
+                    stage_of_work=TAG_STAGE_CANDIDATE,
+                    commit_git=commit_hash,
+                    rol_modelo="champion",
+                )
+            )
+            pipe_champ = crear_pipeline_p2(c=1.0, max_iter=100)
+            pipe_champ.fit(X_train, y_train)
+
+            pred_test_ch = pipe_champ.predict(X_test)
+            proba_test_ch = pipe_champ.predict_proba(X_test)
+            m_test_ch = calcular_metricas_p2(y_test, pd.Series(pred_test_ch, index=y_test.index))
+
+            mlflow.log_params(
+                {
+                    "modelo": "logistic_regression",
+                    "C": 1.0,
+                    "solver": "saga",
+                    "max_iter": 100,
+                    "class_weight": "balanced",
+                    "version_datos": version_datos,
+                    "semilla": SEMILLA_ALEATORIA,
+                }
+            )
+            for k, v in m_test_ch.items():
+                mlflow.log_metric(f"prueba_{k}", v)
+
+            # Artefactos: plots/
+            p2_dir_champ = FIGURES_DIR / "p2_champion"
+            plot_cm = plot_p2_confusion_matrix(
+                y_test,
+                pred_test_ch,
+                ORDEN_CLASES,
+                p2_dir_champ / "matriz_confusion.png",
+                "P2 Champion: Matriz de Confusión (Test)",
+            )
+            plot_roc = plot_p2_roc_curves(
+                y_test,
+                proba_test_ch,
+                ORDEN_CLASES,
+                p2_dir_champ / "curva_roc.png",
+                "P2 Champion: Curvas ROC (Test)",
+            )
+
+            # Guardar modelo skops localmente
+            model_skops_path = MODELS_DIR / "p2" / "modelo_p2.skops"
+            model_skops_path.parent.mkdir(parents=True, exist_ok=True)
+            sio.dump(pipe_champ, model_skops_path)
+
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"modelo": "logistic_regression", "C": 1.0, "solver": "saga"},
+                plots_dict={"confusion_matrix": plot_cm, "roc_curve": plot_roc},
+                dataset_df=test_df[COLUMNAS_CARACTERISTICAS_P2 + [COLUMNA_OBJETIVO]],
+                dataset_target=COLUMNA_OBJETIVO,
+                dataset_name="p2_risk_test",
+            )
+
+            input_ex_p2 = X_test.head(5)
+            sig_p2 = infer_signature(input_ex_p2, pipe_champ.predict(input_ex_p2))
+            mlflow.sklearn.log_model(
+                pipe_champ,
+                artifact_path="model",
+                signature=sig_p2,
+                input_example=input_ex_p2,
+            )
+
+        # Challenger: C=0.1
+        with mlflow.start_run(
+            run_name="P2 - Regresión Logística - Candidato Challenger (C=0.1)"
+        ) as r_chall:
+            challenger_run_id = r_chall.info.run_id
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P2,
+                    model_family="logistic_regression",
+                    stage_of_work=TAG_STAGE_CANDIDATE,
+                    commit_git=commit_hash,
+                    rol_modelo="challenger",
+                )
+            )
+            pipe_chall = crear_pipeline_p2(c=0.1, max_iter=80)
+            pipe_chall.fit(X_train, y_train)
+
+            pred_test_cl = pipe_chall.predict(X_test)
+            m_test_cl = calcular_metricas_p2(y_test, pd.Series(pred_test_cl, index=y_test.index))
+
+            mlflow.log_params(
+                {
+                    "modelo": "logistic_regression",
+                    "C": 0.1,
+                    "solver": "saga",
+                    "max_iter": 80,
+                    "class_weight": "balanced",
+                    "version_datos": version_datos,
+                    "semilla": SEMILLA_ALEATORIA,
+                }
+            )
+            for k, v in m_test_cl.items():
+                mlflow.log_metric(f"prueba_{k}", v)
+
+            p2_dir_chall = FIGURES_DIR / "p2_challenger"
+            plot_cm_cl = plot_p2_confusion_matrix(
+                y_test,
+                pred_test_cl,
+                ORDEN_CLASES,
+                p2_dir_chall / "matriz_confusion.png",
+                "P2 Challenger: Matriz de Confusión",
+            )
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"modelo": "logistic_regression", "C": 0.1, "solver": "saga"},
+                plots_dict={"confusion_matrix": plot_cm_cl},
+            )
+            sig_p2_cl = infer_signature(input_ex_p2, pipe_chall.predict(input_ex_p2))
+            mlflow.sklearn.log_model(
+                pipe_chall,
+                artifact_path="model",
+                signature=sig_p2_cl,
+                input_example=input_ex_p2,
+            )
+
+        # Registro en Model Registry
+        if register_models and champ_run_id and challenger_run_id:
+            logger.info("Registrando modelos de P2 en Model Registry...")
+            asignar_model_registry_con_alias(
+                run_id=champ_run_id,
+                artifact_path="model",
+                model_name=MODEL_REGISTRY_P2,
+                alias="champion",
+                model_description="Modelo de clasificación multiclase de riesgo operativo (vaciado/normal/saturación) para MiBici.",
+                version_description=f"Champion: LogisticRegression C=1.0 balanced. Commit: {commit_hash}",
+            )
+            asignar_model_registry_con_alias(
+                run_id=challenger_run_id,
+                artifact_path="model",
+                model_name=MODEL_REGISTRY_P2,
+                alias="challenger",
+                model_description="Modelo de clasificación multiclase de riesgo operativo para MiBici.",
+                version_description=f"Challenger: LogisticRegression C=0.1 balanced. Commit: {commit_hash}",
+            )
+
+
+# =============================================================================
+
+
+# PREGUNTA 3 (P3): AGRUPAMIENTO DE ESTACIONES (CLUSTERING)
+# =============================================================================
+
+
+def cargar_datos_p3() -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Carga viajes y nomenclatura para generar las 7 características de estación de P3."""
+    trips_dir = PROCESSED_DATA_DIR / "trips"
+    nom_dir = PROCESSED_DATA_DIR / "nomenclature"
+
+    trips_df = pd.read_parquet(trips_dir)
+    nom_files = list(nom_dir.glob("*.parquet"))
+    if not nom_files:
+        raise FileNotFoundError(f"No se encontró nomenclatura en {nom_dir}")
+    stations_df = pd.read_parquet(nom_files[0])
+
+    return trips_df, stations_df
+
+
+def ejecutar_p3(stage: str = "all", register_models: bool = True) -> None:
+    """Ejecuta baseline, búsqueda nested y candidatos para P3."""
+    configurar_mlflow()
+    commit_hash = obtener_commit_git()
+    version_datos = cargar_version_datos()
+
+    logger.info("Cargando y procesando características P3...")
+    trips_df, stations_df = cargar_datos_p3()
+    features_df = generate_p3_station_features(trips_df, stations_df)
+    n_stations, n_features = features_df.shape
+    logger.info(f"Matriz P3 construida: {n_stations} estaciones x {n_features} variables.")
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(features_df)
+
+    # 1. Baseline: K-Means (k=4)
+    if stage in ["all", "baseline"]:
+        logger.info("=== P3: Ejecutando Baseline (K-Means k=4) ===")
+        km_base = KMeans(n_clusters=P3_DEFAULT_K, random_state=SEMILLA_ALEATORIA, n_init=10)
+        labels_base = km_base.fit_predict(X_scaled)
+
+        sil_base = float(silhouette_score(X_scaled, labels_base))
+        dbi_base = float(davies_bouldin_score(X_scaled, labels_base))
+        ine_base = float(km_base.inertia_)
+
+        with mlflow.start_run(run_name="P3 - KMeans - desarrollo (k=4)"):
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P3,
+                    model_family="kmeans",
+                    stage_of_work=TAG_STAGE_BASELINE,
+                    commit_git=commit_hash,
+                    rol_modelo="baseline",
+                )
+            )
+            mlflow.log_params(
+                {
+                    "modelo": "kmeans",
+                    "n_clusters": P3_DEFAULT_K,
+                    "semilla": SEMILLA_ALEATORIA,
+                    "version_datos": version_datos,
+                    "n_stations": n_stations,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "silhouette_score": sil_base,
+                    "davies_bouldin_index": dbi_base,
+                    "inercia": ine_base,
+                }
+            )
+            p_base_map = plot_p3_spatial_clusters(
+                features_df,
+                labels_base,
+                FIGURES_DIR / "p3_baseline_spatial.png",
+                f"P3 Baseline: Clusters Espaciales (k={P3_DEFAULT_K})",
+            )
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"modelo": "kmeans", "k": P3_DEFAULT_K},
+                plots_dict={"clusters_spatial": p_base_map},
+            )
+        logger.info(f"P3 Baseline: Silhouette={sil_base:.4f}, DBI={dbi_base:.4f}")
+
+    # 2. Nested Run: Exploración de K y Algoritmos
+    if stage in ["all", "search"]:
+        logger.info("=== P3: Ejecutando Exploración de K y Algoritmos (Nested Runs) ===")
+        k_values = [3, 4, 5, 6]
+
+        with mlflow.start_run(
+            run_name="P3 - Clustering - Exploración de K y Algoritmos (Grid Search)"
+        ):
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P3,
+                    model_family="kmeans",
+                    stage_of_work=TAG_STAGE_SEARCH,
+                    commit_git=commit_hash,
+                    rol_modelo="exploracion",
+                )
+            )
+            mlflow.log_params({"k_explored": k_values})
+
+            for k in k_values:
+                with mlflow.start_run(run_name=f"P3 - KMeans (k={k})", nested=True):
+                    mlflow.set_tags(
+                        crear_etiquetas_mlflow(
+                            question=TAG_QUESTION_P3,
+                            model_family="kmeans",
+                            stage_of_work=TAG_STAGE_SEARCH,
+                            commit_git=commit_hash,
+                            rol_modelo="hijo_busqueda",
+                        )
+                    )
+                    km_k = KMeans(n_clusters=k, random_state=SEMILLA_ALEATORIA, n_init=10)
+                    lab_k = km_k.fit_predict(X_scaled)
+                    mlflow.log_params({"n_clusters": k, "modelo": "kmeans"})
+                    mlflow.log_metrics(
+                        {
+                            "silhouette_score": float(silhouette_score(X_scaled, lab_k)),
+                            "davies_bouldin_index": float(davies_bouldin_score(X_scaled, lab_k)),
+                            "inercia": float(km_k.inertia_),
+                        }
+                    )
+
+            # Algoritmo Alternativo: Agglomerative Clustering
+            with mlflow.start_run(
+                run_name="P3 - Agglomerative Clustering (k=4, ward)", nested=True
+            ):
+                mlflow.set_tags(
+                    crear_etiquetas_mlflow(
+                        question=TAG_QUESTION_P3,
+                        model_family="agglomerative",
+                        stage_of_work=TAG_STAGE_SEARCH,
+                        commit_git=commit_hash,
+                        rol_modelo="hijo_busqueda",
+                    )
+                )
+                agg = AgglomerativeClustering(n_clusters=4, linkage="ward")
+                lab_agg = agg.fit_predict(X_scaled)
+                mlflow.log_params({"n_clusters": 4, "modelo": "agglomerative", "linkage": "ward"})
+                mlflow.log_metrics(
+                    {
+                        "silhouette_score": float(silhouette_score(X_scaled, lab_agg)),
+                        "davies_bouldin_index": float(davies_bouldin_score(X_scaled, lab_agg)),
+                    }
+                )
+
+    # 3. Modelos Candidatos (Champion y Challenger con Artefactos)
+    if stage in ["all", "candidate"]:
+        logger.info("=== P3: Evaluando Candidatos Finales y Artefactos ===")
+        champ_run_id = None
+        challenger_run_id = None
+
+        # Champion: K-Means con k=4 (mejor balance de Silhouette y separación interpretable)
+        with mlflow.start_run(run_name="P3 - KMeans - Candidato Champion (k=4)") as r_champ:
+            champ_run_id = r_champ.info.run_id
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P3,
+                    model_family="kmeans",
+                    stage_of_work=TAG_STAGE_CANDIDATE,
+                    commit_git=commit_hash,
+                    rol_modelo="champion",
+                )
+            )
+            # Empaquetar pipeline con escalador para inferencia out-of-sample
+            pipe_p3_champ = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("kmeans", KMeans(n_clusters=4, random_state=SEMILLA_ALEATORIA, n_init=10)),
+                ]
+            )
+            pipe_p3_champ.fit(features_df)
+            labels_champ = pipe_p3_champ.named_steps["kmeans"].labels_
+
+            sil_ch = float(silhouette_score(X_scaled, labels_champ))
+            dbi_ch = float(davies_bouldin_score(X_scaled, labels_champ))
+            ine_ch = float(pipe_p3_champ.named_steps["kmeans"].inertia_)
+
+            mlflow.log_params(
+                {
+                    "modelo": "kmeans",
+                    "n_clusters": 4,
+                    "semilla": SEMILLA_ALEATORIA,
+                    "scaler": "StandardScaler",
+                    "n_stations": n_stations,
+                    "version_datos": version_datos,
+                    "features_list": list(features_df.columns),
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "silhouette_score": sil_ch,
+                    "davies_bouldin_index": dbi_ch,
+                    "inercia": ine_ch,
+                }
+            )
+
+            p3_dir_champ = FIGURES_DIR / "p3_champion"
+            p_map_ch = plot_p3_spatial_clusters(
+                features_df,
+                labels_champ,
+                p3_dir_champ / "p3_clusters_spatial.png",
+                "P3 Champion: Clusters Espaciales (k=4)",
+            )
+            p_dist_ch = plot_p3_cluster_distribution(
+                features_df,
+                labels_champ,
+                p3_dir_champ / "p3_clusters_distribucion.png",
+                "P3 Champion: Distribución de Estaciones",
+            )
+
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"modelo": "kmeans", "k": 4, "scaler": "StandardScaler"},
+                plots_dict={"clusters_spatial": p_map_ch, "clusters_distribution": p_dist_ch},
+                dataset_df=features_df,
+                dataset_name="p3_station_profiles",
+            )
+
+            input_ex_p3 = features_df.head(5)
+            sig_p3 = infer_signature(input_ex_p3, pipe_p3_champ.predict(input_ex_p3))
+            mlflow.sklearn.log_model(
+                pipe_p3_champ,
+                artifact_path="model",
+                signature=sig_p3,
+                input_example=input_ex_p3,
+            )
+
+        # Challenger: K-Means con k=5
+        with mlflow.start_run(run_name="P3 - KMeans - Candidato Challenger (k=5)") as r_chall:
+            challenger_run_id = r_chall.info.run_id
+            mlflow.set_tags(
+                crear_etiquetas_mlflow(
+                    question=TAG_QUESTION_P3,
+                    model_family="kmeans",
+                    stage_of_work=TAG_STAGE_CANDIDATE,
+                    commit_git=commit_hash,
+                    rol_modelo="challenger",
+                )
+            )
+            pipe_p3_chall = Pipeline(
+                [
+                    ("scaler", StandardScaler()),
+                    ("kmeans", KMeans(n_clusters=5, random_state=SEMILLA_ALEATORIA, n_init=10)),
+                ]
+            )
+            pipe_p3_chall.fit(features_df)
+            labels_chall = pipe_p3_chall.named_steps["kmeans"].labels_
+
+            mlflow.log_params(
+                {
+                    "modelo": "kmeans",
+                    "n_clusters": 5,
+                    "semilla": SEMILLA_ALEATORIA,
+                    "scaler": "StandardScaler",
+                    "version_datos": version_datos,
+                }
+            )
+            mlflow.log_metrics(
+                {
+                    "silhouette_score": float(silhouette_score(X_scaled, labels_chall)),
+                    "davies_bouldin_index": float(davies_bouldin_score(X_scaled, labels_chall)),
+                    "inercia": float(pipe_p3_chall.named_steps["kmeans"].inertia_),
+                }
+            )
+
+            p3_dir_chall = FIGURES_DIR / "p3_challenger"
+            p_map_cl = plot_p3_spatial_clusters(
+                features_df,
+                labels_chall,
+                p3_dir_chall / "p3_clusters_spatial.png",
+                "P3 Challenger: Clusters Espaciales (k=5)",
+            )
+            registrar_artefactos_en_subcarpetas(
+                config_dict={"modelo": "kmeans", "k": 5, "scaler": "StandardScaler"},
+                plots_dict={"clusters_spatial": p_map_cl},
+            )
+            sig_p3_cl = infer_signature(input_ex_p3, pipe_p3_chall.predict(input_ex_p3))
+            mlflow.sklearn.log_model(
+                pipe_p3_chall,
+                artifact_path="model",
+                signature=sig_p3_cl,
+                input_example=input_ex_p3,
+            )
+
+        # Registro en Model Registry
+        if register_models and champ_run_id and challenger_run_id:
+            logger.info("Registrando modelos de P3 en Model Registry...")
+            asignar_model_registry_con_alias(
+                run_id=champ_run_id,
+                artifact_path="model",
+                model_name=MODEL_REGISTRY_P3,
+                alias="champion",
+                model_description="Modelo de agrupamiento no supervisado de estaciones MiBici por patrón de movilidad y perfil horario.",
+                version_description=f"Champion: KMeans k=4 + StandardScaler. Commit: {commit_hash}",
+            )
+            asignar_model_registry_con_alias(
+                run_id=challenger_run_id,
+                artifact_path="model",
+                model_name=MODEL_REGISTRY_P3,
+                alias="challenger",
+                model_description="Modelo de agrupamiento no supervisado de estaciones MiBici.",
+                version_description=f"Challenger: KMeans k=5 + StandardScaler. Commit: {commit_hash}",
+            )
+
+
+# =============================================================================
+
+
+# =============================================================================
+# COMANDOS CLI (MLPROJECT Y RETROCOMPATIBILIDAD)
+# =============================================================================
+
+
+@app.command("run-mlproject")
+def run_mlproject(
+    question: Annotated[str, typer.Option(help="Pregunta a entrenar: p1, p2, p3 o all")] = "all",
+    model: Annotated[str, typer.Option(help="Modelo específico o default")] = "default",
+    stage: Annotated[str, typer.Option(help="Etapa: all, baseline, search o candidate")] = "all",
+    register_models: Annotated[
+        str, typer.Option(help="Registrar en Model Registry (true/false)")
+    ] = "true",
+) -> None:
+    """Punto de entrada estándar para ejecutar desde MLproject."""
+    reg = register_models.strip().lower() in ["true", "1", "yes"]
+    q = question.strip().lower()
+
+    logger.info(f"Iniciando run-mlproject: question={q}, stage={stage}, register={reg}")
+
+    if q in ["p1", "all"]:
+        ejecutar_p1(stage=stage, register_models=reg)
+
+    if q in ["p2", "all"]:
+        ejecutar_p2(stage=stage, register_models=reg)
+    if q in ["p3", "all"]:
+        ejecutar_p3(stage=stage, register_models=reg)
+
+    logger.success("run-mlproject finalizado con éxito.")
+
+
+@app.command("main")
+def main_p1() -> None:
+    """Comando retrocompatible para P1."""
+    ejecutar_p1(stage="all", register_models=True)
 
 
 @app.command("comparar")
@@ -986,11 +1736,7 @@ def evaluar_final(
         f"max_iter={max_iter}, semilla={semilla}."
     )
     dataset = cargar_dataset(data_path, CONJUNTOS_FINALES)
-    conteos = {
-        str(conjunto): int(cantidad)
-        for conjunto, cantidad in dataset[COLUMNA_CONJUNTO].value_counts().items()
-    }
-
+    conteos = {conjunto: len(df) for conjunto, df in dataset.groupby(COLUMNA_CONJUNTO)}
     with mlflow.start_run(run_name=NOMBRE_RUN_FINAL):
         mlflow.set_tags(
             crear_etiquetas_mlflow(
@@ -1012,12 +1758,7 @@ def evaluar_final(
                 max_iter,
             )
         )
-        mlflow.log_artifact(
-            str(RUTA_MANIFIESTO),
-            artifact_path="reproducibilidad",
-        )
-
-        modelo_entrenado, metricas = evaluar_modelo_final(
+        modelo_final, metricas = evaluar_modelo_final(
             dataset,
             modelo,
             figures_dir,
@@ -1026,198 +1767,42 @@ def evaluar_final(
             solver,
             max_iter,
         )
-        metrics_path.parent.mkdir(parents=True, exist_ok=True)
-        metricas.to_csv(metrics_path, index=False)
-        model_path.parent.mkdir(parents=True, exist_ok=True)
-        sio.dump(modelo_entrenado, model_path)
-
-        for fila in metricas.to_dict(orient="records"):
-            conjunto = str(fila.pop("conjunto"))
-            fila.pop("modelo")
-            metricas_conjunto = {
-                nombre: float(valor)
-                for nombre, valor in fila.items()
+        for _, fila in metricas.iterrows():
+            conjunto = str(fila["conjunto"])
+            valores = {
+                clave: float(fila[clave])
+                for clave in [
+                    "accuracy",
+                    "f1_macro",
+                    "recall_vaciado",
+                    "recall_saturacion",
+                    "gmean",
+                ]
             }
-            mlflow.log_metrics(
-                prefijar_metricas_mlflow(conjunto, metricas_conjunto)
-            )
+            mlflow.log_metrics(prefijar_metricas_mlflow(conjunto, valores))
 
+        for conjunto in CONJUNTOS_FINALES:
+            ruta_matriz = figures_dir / f"matriz_final_{conjunto}.png"
             mlflow.log_artifact(
-                str(figures_dir / f"matriz_final_{conjunto}.png"),
+                str(ruta_matriz),
                 artifact_path="matrices_confusion",
             )
 
-        mlflow.log_artifact(str(metrics_path), artifact_path="metricas")
-        mlflow.log_artifact(str(model_path), artifact_path="modelo_serializado")
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        sio.dump(modelo_final, model_path)
+        mlflow.log_artifact(str(model_path), artifact_path="modelos")
+        logger.info(f"Modelo persistido en: {model_path}")
 
-        ejemplo_entrada = dataset.loc[
-            dataset[COLUMNA_CONJUNTO] == "entrenamiento",
-            COLUMNAS_CARACTERISTICAS_P2,
-        ].head(5)
-        ejemplo_salida = modelo_entrenado.predict(ejemplo_entrada)
-        firma = infer_signature(ejemplo_entrada, ejemplo_salida)
-        mlflow.sklearn.log_model(
-            sk_model=modelo_entrenado,
-            name="modelo",
-            signature=firma,
-            input_example=ejemplo_entrada,
-        )
-
+    metrics_path.parent.mkdir(parents=True, exist_ok=True)
+    metricas.to_csv(metrics_path, index=False)
     mostrar_metricas(metricas)
-    logger.success(
-        f"Evaluación final terminada. Métricas: {metrics_path} | Modelo: {model_path}"
-    )
-# ========================= FIN ENTRENAMIENTO P2 ==========================
-
-# ========================= INICIO ENTRENAMIENTO P3 ==========================
-
-
-def load_processed_data() -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Carga los conjuntos procesados de viajes y nomenclatura desde data/processed/."""
-    trips_path = PROCESSED_DATA_DIR / "trips"
-    nomenclature_path = PROCESSED_DATA_DIR / "nomenclature"
-
-    # Lectura si es carpeta con particiones Parquet o archivo Parquet consolidado
-    if trips_path.is_dir():
-        trips_df = pd.read_parquet(trips_path)
-    elif trips_path.with_suffix(".parquet").exists():
-        trips_df = pd.read_parquet(trips_path.with_suffix(".parquet"))
-    else:
-        parquet_trips = list(PROCESSED_DATA_DIR.glob("*trips*.parquet"))
-        if not parquet_trips:
-            raise FileNotFoundError(
-                f"No se encontró el conjunto de viajes en {trips_path}"
-            )
-        trips_df = pd.read_parquet(parquet_trips[0])
-
-    if nomenclature_path.is_dir():
-        stations_df = pd.read_parquet(nomenclature_path)
-    elif nomenclature_path.with_suffix(".parquet").exists():
-        stations_df = pd.read_parquet(nomenclature_path.with_suffix(".parquet"))
-    else:
-        parquet_nom = list(PROCESSED_DATA_DIR.glob("*nomenclatura*.parquet"))
-        if not parquet_nom:
-            raise FileNotFoundError(
-                f"No se encontró el catálogo de nomenclatura en {nomenclature_path}"
-            )
-        stations_df = pd.read_parquet(parquet_nom[0])
-
-    return trips_df, stations_df
+    logger.success(f"Evaluación final guardada en: {metrics_path}")
 
 
 @app.command("p3")
 def train_p3_baseline() -> None:
-    """Ejecuta el baseline de clustering de P3 y lo registra en MLflow."""
-    print("1. Cargando datos desde data/processed/ (Ene 2024 - Sep 2026)...")
-    trips_df, stations_df = load_processed_data()
-
-    print("2. Generando características a nivel estación con features.py...")
-    features_df = generate_p3_station_features(trips_df, stations_df)
-    n_stations, n_features = features_df.shape
-    print(f"   Matriz construida: {n_stations} estaciones y {n_features} variables.")
-
-    print(f"3. Configurando experimento en MLflow: {NOMBRE_EXPERIMENTO}...")
-    configurar_mlflow()
-    version_datos = cargar_version_datos()
-    commit_hash = obtener_commit_git()
-
-    with mlflow.start_run(run_name="P3 - KMeans - desarrollo"):
-        # Tags de trazabilidad y gobernanza
-        mlflow.set_tags(
-            crear_etiquetas_mlflow(
-                pregunta="P3",
-                tipo_tarea="clustering",
-                etapa="desarrollo",
-                rol_modelo="baseline",
-                commit_git=commit_hash,
-            )
-        )
-
-        # Escalado estandarizado
-        scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(features_df)
-
-        # Modelo Baseline: K-Means con hiperparámetros centralizados
-        model = KMeans(
-            n_clusters=P3_DEFAULT_K,
-            random_state=SEMILLA_ALEATORIA,
-            n_init=10,
-        )
-        labels = model.fit_predict(X_scaled)
-
-        # Métricas no supervisadas
-        sil_score = float(silhouette_score(X_scaled, labels))
-        db_score = float(davies_bouldin_score(X_scaled, labels))
-        inertia_score = float(model.inertia_)
-
-        # Registro de Parámetros
-        data_range_str = f"{START_YEAR}-{START_MONTH:02d}_to_{END_YEAR}-{END_MONTH:02d}"
-        mlflow.log_params(
-            {
-                "data_range": data_range_str,
-                "start_year": START_YEAR,
-                "start_month": START_MONTH,
-                "end_year": END_YEAR,
-                "end_month": END_MONTH,
-                "nomenclature_file": NOMENCLATURE_FILE,
-                "version_datos": version_datos,
-                "modelo": "kmeans",
-                "n_clusters": P3_DEFAULT_K,
-                "semilla": SEMILLA_ALEATORIA,
-                "scaler": "StandardScaler",
-                "n_stations": n_stations,
-                "features_list": list(features_df.columns),
-            }
-        )
-
-        # Registro de Métricas con prefijo identificador
-        mlflow.log_metrics(
-            {
-                "silhouette_score": sil_score,
-                "davies_bouldin_index": db_score,
-                "inercia": inertia_score,
-            }
-        )
-
-        # Generación del artefacto: mapa de clusters
-        FIGURES_DIR.mkdir(parents=True, exist_ok=True)
-        figure_path = FIGURES_DIR / "p3_clusters_spatial.png"
-
-        figure, ax = plt.subplots(figsize=(8, 6))
-        scatter = ax.scatter(
-            features_df["longitude"],
-            features_df["latitude"],
-            c=labels,
-            cmap="tab10",
-            s=45,
-            alpha=0.8,
-            edgecolors="none",
-        )
-        ax.set_title(
-            f"MiBici - Clusters de Estaciones (k={P3_DEFAULT_K})\n"
-            f"Periodo: {data_range_str} | Silhouette: {sil_score:.3f} | DBI: {db_score:.3f}",
-            fontsize=11,
-            fontweight="bold",
-        )
-        ax.set_xlabel("Longitud")
-        ax.set_ylabel("Latitud")
-        ax.grid(True, linestyle=":", alpha=0.6)
-        figure.colorbar(scatter, ax=ax, label="Cluster")
-        figure.tight_layout()
-        figure.savefig(figure_path, dpi=200)
-        plt.close(figure)
-
-        # Registro de artefactos para resultado y reproducibilidad
-        mlflow.log_artifact(str(figure_path), artifact_path="figuras")
-        mlflow.log_artifact(str(RUTA_MANIFIESTO), artifact_path="reproducibilidad")
-
-        print(
-            f"\nRun P3 registrado en MLflow con éxito:"
-            f"\n - Periodo: {data_range_str}"
-            f"\n - Silhouette Score: {sil_score:.4f}"
-            f"\n - Davies-Bouldin: {db_score:.4f}"
-            f"\n - Artefacto: {figure_path}"
-        )
+    """Comando retrocompatible para P3."""
+    ejecutar_p3(stage="all", register_models=True)
 
 
 PASOS_EXPERIMENTO_COMPLETO = [
@@ -1291,10 +1876,9 @@ def ejecutar_paso_experimento(nombre: str, comando: list[str]) -> None:
 
 @app.command("experimento-completo")
 def experimento_completo() -> None:
-    """Ejecuta P1, P2 y P3 en orden después de realizar la ingesta."""
+    """Ejecuta el ciclo de P1, P2 y P3 completo paso a paso tras la ingesta."""
     logger.info(
-        "Ejecutando el experimento completo. "
-        "La ingesta debe haberse ejecutado previamente."
+        "Ejecutando el experimento completo. La ingesta debe haberse ejecutado previamente."
     )
     for nombre, comando in PASOS_EXPERIMENTO_COMPLETO:
         ejecutar_paso_experimento(nombre, comando)
