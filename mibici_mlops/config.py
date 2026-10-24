@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -37,7 +38,23 @@ NOMENCLATURE_FILE = "nomenclatura_2026_09.csv"
 # ==========================================
 NOMBRE_EXPERIMENTO = "mibici-equipo51"
 SEMILLA_ALEATORIA = 777
-MLFLOW_TRACKING_URI = "http://127.0.0.1:5000"
+
+# Tracking URI configurable vía variable de entorno (por defecto SQLite local)
+MLFLOW_TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "sqlite:///mlflow.db")
+
+# Nombres estandarizados para Model Registry
+MODEL_REGISTRY_P1 = "mibici-equipo51-p1-demanda"
+MODEL_REGISTRY_P2 = "mibici-equipo51-p2-riesgo"
+MODEL_REGISTRY_P3 = "mibici-equipo51-p3-grupos"
+
+# Tags obligatorios de trazabilidad y gobernanza
+TAG_TEAM = "equipo51"
+TAG_QUESTION_P1 = "p1"
+TAG_QUESTION_P2 = "p2"
+TAG_QUESTION_P3 = "p3"
+TAG_STAGE_BASELINE = "baseline"
+TAG_STAGE_SEARCH = "search"
+TAG_STAGE_CANDIDATE = "candidate"
 
 # P1 temporal configuration
 P1_DATA_START = "2024-01-01 00:00:00"
@@ -81,4 +98,3 @@ try:
     logger.add(lambda msg: tqdm.write(msg, end=""), colorize=True)
 except ModuleNotFoundError:
     pass
-
