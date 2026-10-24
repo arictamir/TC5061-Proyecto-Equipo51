@@ -226,3 +226,13 @@ models/*
 *.pkl
 *.pickle
 *.joblib
+# Extra model formats and MLflow DBs
+*.onnx
+*.cbm
+*.h5
+*.pt
+*.pth
+*.parquet
+mlflow.db*
+mlruns/
+mlartifacts/

@@ -1,0 +1,24 @@
+name: mibici-equipo51
+
+python_env: python_env.yaml
+
+entry_points:
+  main:
+    parameters:
+      question: {type: string, default: "all"}
+      stage: {type: string, default: "all"}
+    command: "python -m mibici_mlops.modeling.train run-mlproject --question {question} --stage {stage}"
+
+  ingest:
+    command: "python -m mibici_mlops.dataset"
+
+  train:
+    parameters:
+      question: {type: string, default: "all"}
+      model: {type: string, default: "default"}
+      stage: {type: string, default: "all"}
+      register_models: {type: string, default: "true"}
+    command: "python -m mibici_mlops.modeling.train run-mlproject --question {question} --model {model} --stage {stage} --register-models {register_models}"
+
+  verify_registry:
+    command: "python -m mibici_mlops.modeling.predict verify-registry"

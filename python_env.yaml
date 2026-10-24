@@ -1,0 +1,27 @@
+# Especificación de entorno para MLproject - TC5061 Equipo 51
+python: "3.10.21"
+build_dependencies:
+  - pip==26.2.1
+  - setuptools
+  - wheel
+dependencies:
+  - beautifulsoup4==4.15.0
+  - catboost==1.2.10
+  - ipykernel==7.3.0
+  - loguru==0.7.3
+  - matplotlib==3.10.9
+  - mkdocs==1.6.1
+  - mlflow==3.16.1
+  - pandas==2.3.3
+  - pip==26.2.1
+  - pyarrow==25.0.1
+  - pytest==9.1.1
+  - python-dotenv==1.2.4
+  - ruff==0.17.1
+  - scikit-learn==1.7.2
+  - tqdm==4.70.1
+  - typer==0.27.3
+  - requests==2.34.2
+  - seaborn==0.13.2
+  - skops==0.16.0
+  - -e .
