@@ -1,4 +1,3 @@
-
 import hashlib
 import json
 from pathlib import Path
@@ -103,21 +102,12 @@ def select_required_files(csv_urls: dict[str, str]) -> dict[str, str]:
 
     required_files.append(NOMENCLATURE_FILE)
 
-    missing_files = [
-        filename
-        for filename in required_files
-        if filename not in csv_urls
-    ]
+    missing_files = [filename for filename in required_files if filename not in csv_urls]
 
     if missing_files:
-        raise ValueError(
-            f"Required files not found in MiBici portal: {missing_files}"
-        )
+        raise ValueError(f"Required files not found in MiBici portal: {missing_files}")
 
-    selected_urls = {
-        filename: csv_urls[filename]
-        for filename in required_files
-    }
+    selected_urls = {filename: csv_urls[filename] for filename in required_files}
 
     logger.success(
         f"Validated {len(selected_urls)} required files "
@@ -193,9 +183,7 @@ def download_required_files(
         file_path = download_file(url, destination)
         downloaded_files.append(file_path)
 
-    logger.success(
-        f"Download step completed for {len(downloaded_files)} required files."
-    )
+    logger.success(f"Download step completed for {len(downloaded_files)} required files.")
 
     return downloaded_files
 
@@ -255,9 +243,7 @@ def clean_trips(df: pd.DataFrame) -> pd.DataFrame:
 
     # February and May 2024 contain a malformed source header that
     # normalizes to ``a_ae_nacimiento`` instead of ``ano_de_nacimiento``.
-    df = df.rename(
-        columns={"a_ae_nacimiento": "ano_de_nacimiento"}
-    )
+    df = df.rename(columns={"a_ae_nacimiento": "ano_de_nacimiento"})
 
     date_columns = ["inicio_del_viaje", "fin_del_viaje"]
 
@@ -275,9 +261,7 @@ def deduplicate_trips(df: pd.DataFrame) -> pd.DataFrame:
     if duplicate_count == 0:
         return df
 
-    logger.warning(
-        f"Removing {duplicate_count:,} exact duplicate trip rows."
-    )
+    logger.warning(f"Removing {duplicate_count:,} exact duplicate trip rows.")
 
     return df.drop_duplicates().reset_index(drop=True)
 
@@ -295,9 +279,7 @@ def validate_trips(df: pd.DataFrame) -> None:
     missing_columns = required_columns - set(df.columns)
 
     if missing_columns:
-        raise ValueError(
-            f"Missing required columns: {sorted(missing_columns)}"
-        )
+        raise ValueError(f"Missing required columns: {sorted(missing_columns)}")
 
     critical_columns = [
         "viaje_id",
@@ -310,9 +292,7 @@ def validate_trips(df: pd.DataFrame) -> None:
     null_counts = df[critical_columns].isna().sum()
 
     if (null_counts > 0).any():
-        raise ValueError(
-            f"Null values found in critical columns:\n{null_counts[null_counts > 0]}"
-        )
+        raise ValueError(f"Null values found in critical columns:\n{null_counts[null_counts > 0]}")
 
     logger.success("Dataset validation passed.")
 
@@ -346,23 +326,15 @@ def validate_nomenclature(df: pd.DataFrame) -> None:
         "capacity",
     ]
 
-    missing_columns = [
-        column
-        for column in required_columns
-        if column not in df.columns
-    ]
+    missing_columns = [column for column in required_columns if column not in df.columns]
 
     if missing_columns:
-        raise ValueError(
-            f"Missing required nomenclature columns: {missing_columns}"
-        )
+        raise ValueError(f"Missing required nomenclature columns: {missing_columns}")
 
     null_counts = df[required_columns].isna().sum()
 
     if null_counts.any():
-        raise ValueError(
-            f"Null values found in nomenclature:\n{null_counts}"
-        )
+        raise ValueError(f"Null values found in nomenclature:\n{null_counts}")
 
     if df["station_id"].duplicated().any():
         raise ValueError("Duplicate station IDs found in nomenclature.")
@@ -374,8 +346,7 @@ def validate_nomenclature(df: pd.DataFrame) -> None:
 
     if zero_capacity_count > 0:
         logger.warning(
-            f"Nomenclature contains {zero_capacity_count} stations "
-            "with capacity equal to zero."
+            f"Nomenclature contains {zero_capacity_count} stations with capacity equal to zero."
         )
 
     logger.success("Nomenclature validation passed.")
@@ -389,13 +360,10 @@ def remove_unexpected_trip_parquets(
     managed_output_dir = (PROCESSED_DATA_DIR / "trips").resolve()
 
     if output_dir.resolve() != managed_output_dir:
-        raise ValueError(
-            f"Refusing to clean unexpected directory: {output_dir}"
-        )
+        raise ValueError(f"Refusing to clean unexpected directory: {output_dir}")
 
     expected_parquet_names = {
-        filename.replace(".csv", ".parquet")
-        for filename in expected_filenames
+        filename.replace(".csv", ".parquet") for filename in expected_filenames
     }
 
     stale_files = sorted(
@@ -443,9 +411,7 @@ def process_trip_files() -> list[Path]:
 
         processed_files.append(output_path)
 
-        logger.success(
-            f"Processed {filename}: {len(df):,} rows."
-        )
+        logger.success(f"Processed {filename}: {len(df):,} rows.")
 
     return processed_files
 
@@ -473,9 +439,7 @@ def process_nomenclature() -> Path:
         index=False,
     )
 
-    logger.success(
-        f"Processed nomenclature: {len(df):,} stations."
-    )
+    logger.success(f"Processed nomenclature: {len(df):,} stations.")
 
     return output_path
 
@@ -495,16 +459,10 @@ def audit_trip_file(file_path: Path) -> dict:
         "destino_id",
     ]
 
-    missing_columns = [
-        column
-        for column in critical_columns
-        if column not in df.columns
-    ]
+    missing_columns = [column for column in critical_columns if column not in df.columns]
 
     null_counts = {
-        column: int(df[column].isna().sum())
-        for column in critical_columns
-        if column in df.columns
+        column: int(df[column].isna().sum()) for column in critical_columns if column in df.columns
     }
 
     return {
@@ -515,14 +473,10 @@ def audit_trip_file(file_path: Path) -> dict:
         "missing_columns": missing_columns,
         "critical_nulls": null_counts,
         "min_start_date": (
-            df["inicio_del_viaje"].min()
-            if "inicio_del_viaje" in df.columns
-            else None
+            df["inicio_del_viaje"].min() if "inicio_del_viaje" in df.columns else None
         ),
         "max_start_date": (
-            df["inicio_del_viaje"].max()
-            if "inicio_del_viaje" in df.columns
-            else None
+            df["inicio_del_viaje"].max() if "inicio_del_viaje" in df.columns else None
         ),
     }
 
@@ -542,18 +496,14 @@ def audit_trip_dataset() -> pd.DataFrame:
         file_path = RAW_DATA_DIR / filename
 
         if not file_path.exists():
-            raise FileNotFoundError(
-                f"Required raw file not found: {file_path}"
-            )
+            raise FileNotFoundError(f"Required raw file not found: {file_path}")
 
         result = audit_trip_file(file_path)
         audit_results.append(result)
 
     audit_df = pd.DataFrame(audit_results)
 
-    logger.success(
-        f"Audit completed for {len(audit_df)} monthly trip files."
-    )
+    logger.success(f"Audit completed for {len(audit_df)} monthly trip files.")
 
     return audit_df
 
@@ -627,8 +577,7 @@ def create_data_manifest(selected_urls: dict[str, str]) -> Path:
         json.dump(manifest, file, indent=2, ensure_ascii=False)
 
     logger.success(
-        f"Data manifest created: {manifest_path} "
-        f"(dataset_version={dataset_version[:12]})"
+        f"Data manifest created: {manifest_path} (dataset_version={dataset_version[:12]})"
     )
 
     return manifest_path

@@ -82,8 +82,7 @@ def build_p1_hourly_demand(parquet_files, data_start, data_end):
         df_month["hour"] = df_month["inicio_del_viaje"].dt.floor("h")
 
         hourly_month = (
-            df_month
-            .groupby(["origen_id", "hour"])
+            df_month.groupby(["origen_id", "hour"])
             .size()
             .reset_index(name="trips_started")
             .rename(columns={"origen_id": "station_id"})
@@ -93,8 +92,7 @@ def build_p1_hourly_demand(parquet_files, data_start, data_end):
 
         # Activity observed as origin
         origin_activity = (
-            df_month
-            .groupby("origen_id")
+            df_month.groupby("origen_id")
             .agg(
                 first_activity=("inicio_del_viaje", "min"),
                 last_activity=("inicio_del_viaje", "max"),
@@ -105,8 +103,7 @@ def build_p1_hourly_demand(parquet_files, data_start, data_end):
 
         # Activity observed as destination
         destination_activity = (
-            df_month
-            .groupby("destino_id")
+            df_month.groupby("destino_id")
             .agg(
                 first_activity=("fin_del_viaje", "min"),
                 last_activity=("fin_del_viaje", "max"),
@@ -115,9 +112,7 @@ def build_p1_hourly_demand(parquet_files, data_start, data_end):
             .reset_index()
         )
 
-        activity_parts.extend(
-            [origin_activity, destination_activity]
-        )
+        activity_parts.extend([origin_activity, destination_activity])
 
     hourly_demand = pd.concat(
         hourly_parts,
@@ -157,10 +152,12 @@ def build_p1_hourly_demand(parquet_files, data_start, data_end):
             freq="h",
         )
 
-        station_complete = pd.DataFrame({
-            "station_id": station_id,
-            "hour": full_hours,
-        })
+        station_complete = pd.DataFrame(
+            {
+                "station_id": station_id,
+                "hour": full_hours,
+            }
+        )
 
         station_demand = hourly_demand.loc[
             hourly_demand["station_id"] == station_id,
@@ -174,9 +171,7 @@ def build_p1_hourly_demand(parquet_files, data_start, data_end):
         )
 
         station_complete["trips_started"] = (
-            station_complete["trips_started"]
-            .fillna(0)
-            .astype("int32")
+            station_complete["trips_started"].fillna(0).astype("int32")
         )
 
         complete_parts.append(station_complete)
@@ -209,62 +204,32 @@ def build_p1_features(hourly_data: pd.DataFrame) -> pd.DataFrame:
     pd.DataFrame
         Dataset with the features required for P1.
     """
-    features = (
-        hourly_data
-        .sort_values(["station_id", "hour"])
-        .copy()
-    )
+    features = hourly_data.sort_values(["station_id", "hour"]).copy()
 
     # Calendar features
     features["hour_of_day"] = features["hour"].dt.hour
     features["day_of_week"] = features["hour"].dt.dayofweek
-    features["is_weekend"] = (
-        features["day_of_week"] >= 5
-    ).astype("int8")
+    features["is_weekend"] = (features["day_of_week"] >= 5).astype("int8")
     features["month"] = features["hour"].dt.month
 
     # Historical lag features
-    features["lag_1"] = (
-        features
-        .groupby("station_id")["trips_started"]
-        .shift(1)
-    )
+    features["lag_1"] = features.groupby("station_id")["trips_started"].shift(1)
 
-    features["lag_24"] = (
-        features
-        .groupby("station_id")["trips_started"]
-        .shift(24)
-    )
+    features["lag_24"] = features.groupby("station_id")["trips_started"].shift(24)
 
-    features["lag_168"] = (
-        features
-        .groupby("station_id")["trips_started"]
-        .shift(168)
-    )
+    features["lag_168"] = features.groupby("station_id")["trips_started"].shift(168)
 
     # Rolling historical features
-    features["rolling_mean_3h"] = (
-        features
-        .groupby("station_id")["trips_started"]
-        .transform(
-            lambda x: x.shift(1).rolling(window=3).mean()
-        )
+    features["rolling_mean_3h"] = features.groupby("station_id")["trips_started"].transform(
+        lambda x: x.shift(1).rolling(window=3).mean()
     )
 
-    features["rolling_mean_24h"] = (
-        features
-        .groupby("station_id")["trips_started"]
-        .transform(
-            lambda x: x.shift(1).rolling(window=24).mean()
-        )
+    features["rolling_mean_24h"] = features.groupby("station_id")["trips_started"].transform(
+        lambda x: x.shift(1).rolling(window=24).mean()
     )
 
     # Amount of historical information available for each station
-    features["history_hours"] = (
-        features
-        .groupby("station_id")
-        .cumcount()
-    )
+    features["history_hours"] = features.groupby("station_id").cumcount()
 
     return features
 
@@ -318,9 +283,7 @@ def obtener_rutas_viajes(directorio: Path) -> list[Path]:
     faltantes = [ruta.name for ruta in rutas if not ruta.exists()]
 
     if faltantes:
-        raise FileNotFoundError(
-            "Faltan archivos de viajes procesados: " + ", ".join(faltantes)
-        )
+        raise FileNotFoundError("Faltan archivos de viajes procesados: " + ", ".join(faltantes))
 
     return rutas
 
@@ -379,9 +342,7 @@ def crear_flujos_estacion_hora(rutas: list[Path]) -> pd.DataFrame:
         .groupby(["estacion_id", "fecha_hora"], as_index=False)[["entradas", "salidas"]]
         .sum()
     )
-    flujos[["entradas", "salidas"]] = (
-        flujos[["entradas", "salidas"]].fillna(0).astype("int32")
-    )
+    flujos[["entradas", "salidas"]] = flujos[["entradas", "salidas"]].fillna(0).astype("int32")
 
     inicio = pd.Timestamp(P2_INICIO_ENTRENAMIENTO)
     fin = pd.Timestamp(P2_FIN_PRUEBA)
@@ -413,9 +374,7 @@ def filtrar_estaciones_sin_capacidad(
     nomenclatura: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Reporta y excluye estaciones sin una capacidad positiva."""
-    estaciones_validas = nomenclatura.loc[
-        nomenclatura["capacidad"].gt(0), "estacion_id"
-    ]
+    estaciones_validas = nomenclatura.loc[nomenclatura["capacidad"].gt(0), "estacion_id"]
     ids_validos = set(estaciones_validas.tolist())
     ids_observados = set(flujos["estacion_id"].unique().tolist())
     ids_excluidos = sorted(ids_observados - ids_validos)
@@ -427,18 +386,14 @@ def filtrar_estaciones_sin_capacidad(
         )
 
     flujos_validos = flujos[flujos["estacion_id"].isin(ids_validos)].copy()
-    nomenclatura_valida = nomenclatura[
-        nomenclatura["estacion_id"].isin(ids_validos)
-    ].copy()
+    nomenclatura_valida = nomenclatura[nomenclatura["estacion_id"].isin(ids_validos)].copy()
     return flujos_validos, nomenclatura_valida
 
 
 def crear_rejilla_horas_activas(flujos: pd.DataFrame) -> pd.DataFrame:
     """Crea una fila por hora entre la primera y última actividad de cada estación."""
     intervalos = (
-        flujos.groupby("estacion_id")["fecha_hora"]
-        .agg(inicio="min", fin="max")
-        .reset_index()
+        flujos.groupby("estacion_id")["fecha_hora"].agg(inicio="min", fin="max").reset_index()
     )
     partes = [
         pd.DataFrame(
@@ -564,9 +519,7 @@ def preparar_dataset_p2(
     estacion_hora = completar_horas_y_estaciones(flujos, nomenclatura)
     estacion_hora = agregar_objetivo_p2(estacion_hora)
     estacion_hora = agregar_caracteristicas_historicas(estacion_hora)
-    estacion_hora["clase_riesgo"] = clasificar_presion(
-        estacion_hora["presion_futura_2h"]
-    )
+    estacion_hora["clase_riesgo"] = clasificar_presion(estacion_hora["presion_futura_2h"])
     estacion_hora["conjunto"] = asignar_conjunto_temporal(estacion_hora["fecha_hora"])
 
     columnas_salida = [
@@ -616,9 +569,7 @@ def generar_p2(
     """Genera el conjunto reproducible de características y objetivo de P2."""
     directorio_viajes = PROCESSED_DATA_DIR / "trips"
     ruta_nomenclatura = (
-        PROCESSED_DATA_DIR
-        / "nomenclature"
-        / NOMENCLATURE_FILE.replace(".csv", ".parquet")
+        PROCESSED_DATA_DIR / "nomenclature" / NOMENCLATURE_FILE.replace(".csv", ".parquet")
     )
     rutas_viajes = obtener_rutas_viajes(directorio_viajes)
 
@@ -635,16 +586,16 @@ def generar_p2(
         f"filas={len(dataset):,} | estaciones={dataset['estacion_id'].nunique()}"
     )
     logger.info(
-        "Filas por conjunto: "
-        + str(dataset["conjunto"].value_counts().sort_index().to_dict())
+        "Filas por conjunto: " + str(dataset["conjunto"].value_counts().sort_index().to_dict())
     )
+
+
 # ========================= FIN CARACTERÍSTICAS P2 ==========================
 
 
 # ---------------------------------------------------------------------
 # P3 - Station clustering
 # ---------------------------------------------------------------------
-
 
 
 def _resolve_column_names(df: pd.DataFrame) -> dict:
@@ -721,10 +672,7 @@ def compute_hourly_profiles(
     columnas_requeridas = {"inicio", "fin", "origen", "destino"}
     faltantes = columnas_requeridas - set(col_map)
     if faltantes:
-        raise ValueError(
-            "No se encontraron columnas necesarias para P3: "
-            f"{sorted(faltantes)}"
-        )
+        raise ValueError(f"No se encontraron columnas necesarias para P3: {sorted(faltantes)}")
 
     inicio_col = col_map["inicio"]
     fin_col = col_map["fin"]
@@ -780,9 +728,7 @@ def generate_p3_station_features(
     found_id = None
     for cand in station_id_candidates:
         if cand in [c.lower() for c in stations.columns]:
-            found_id = next(
-                c for c in stations.columns if c.lower() == cand
-            )
+            found_id = next(c for c in stations.columns if c.lower() == cand)
             break
 
     if found_id:
@@ -799,12 +745,8 @@ def generate_p3_station_features(
     # Ratios y normalizaciones
     merged["ratio_am"] = merged["salidas_am"] / (merged["entradas_am"] + eps)
     merged["ratio_pm"] = merged["salidas_pm"] / (merged["entradas_pm"] + eps)
-    merged["pct_fin_semana"] = merged["salidas_fin_semana"] / (
-        merged["salidas_totales"] + eps
-    )
-    merged["pct_domingo"] = merged["salidas_domingo"] / (
-        merged["salidas_totales"] + eps
-    )
+    merged["pct_fin_semana"] = merged["salidas_fin_semana"] / (merged["salidas_totales"] + eps)
+    merged["pct_domingo"] = merged["salidas_domingo"] / (merged["salidas_totales"] + eps)
 
     # Identificar columna de capacidad
     cap_candidates = ["capacidad", "capacity", "obcn", "slots"]
@@ -816,29 +758,19 @@ def generate_p3_station_features(
             break
 
     if cap_col:
-        merged["rotacion_capacidad"] = (
-            merged["salidas_totales"] + merged["entradas_totales"]
-        ) / (merged[cap_col] + eps)
-    else:
-        merged["rotacion_capacidad"] = (
-            merged["salidas_totales"] + merged["entradas_totales"]
+        merged["rotacion_capacidad"] = (merged["salidas_totales"] + merged["entradas_totales"]) / (
+            merged[cap_col] + eps
         )
+    else:
+        merged["rotacion_capacidad"] = merged["salidas_totales"] + merged["entradas_totales"]
 
     # Resolver columnas de coordenadas
     lat_col = next(
-        (
-            c
-            for c in merged.columns
-            if c.lower() in ["latitude", "latitud", "lat"]
-        ),
+        (c for c in merged.columns if c.lower() in ["latitude", "latitud", "lat"]),
         None,
     )
     lon_col = next(
-        (
-            c
-            for c in merged.columns
-            if c.lower() in ["longitude", "longitud", "lon", "lng"]
-        ),
+        (c for c in merged.columns if c.lower() in ["longitude", "longitud", "lon", "lng"]),
         None,
     )
     if lat_col is None or lon_col is None:
@@ -864,6 +796,7 @@ def generate_p3_station_features(
 # ---------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------
+
 
 @app.command()
 def main(
