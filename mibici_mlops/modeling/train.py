@@ -101,6 +101,7 @@ def crear_etiquetas_mlflow(
 
 # ======================== INICIO ENTRENAMIENTO P1 ========================
 
+
 @app.command()
 def main():
     """Train the model for P1: hourly trip demand forecasting."""
