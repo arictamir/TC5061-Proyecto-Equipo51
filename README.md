@@ -5,13 +5,17 @@ Proyecto integrador de la materia TC5061 para construir y registrar un experimen
 Equipo 51:
 
 - Ariadna del Carmen Tapia Miranda — A01840093
+
 - Gabriela Díaz Oropeza — A01327276
+
 - Ingrid Hernández Carrasco — A01734169
 
 ### Roles y colaboración
 
 - Gabriela Díaz Oropeza: responsable principal de P1, predicción de demanda horaria.
+
 - Ingrid Hernández Carrasco: responsable principal de P2, clasificación de riesgo operativo.
+
 - Ariadna del Carmen Tapia Miranda: responsable principal de P3, agrupamiento de estaciones.
 
 Las tres integrantes son colaboradoras del proyecto y participaron en la revisión general, integración y validación de la entrega completa.
@@ -39,8 +43,11 @@ El flujo se ejecuta como un solo experimento: primero prepara una versión comú
 ### Fuente
 
 - Portal oficial: [Datos abiertos de MiBici](https://mibici.net/es/datos-abiertos/)
+
 - Periodo de viajes: enero de 2024 a septiembre de 2026.
+
 - Nomenclatura de estaciones: septiembre de 2026.
+
 - Archivos fuente: 33 CSV mensuales de viajes y 1 CSV de nomenclatura.
 
 La ingesta descubre y descarga los archivos, valida su estructura, normaliza columnas, elimina filas exactamente duplicadas, genera archivos Parquet y actualiza `data_manifest.json`.
@@ -91,228 +98,383 @@ Los límites finales se manejan como exclusivos en el código para evitar trasla
 ### 3.2 P1 — Predicción de demanda horaria
 
 - **Unidad de análisis:** estación-hora.
+
 - **Objetivo:** número de viajes que comienzan en una estación durante una hora.
+
 - **Características:** estación, hora del día, día de la semana, fin de semana, mes, rezagos de 1, 24 y 168 horas, promedios móviles de 3 y 24 horas, e historia disponible.
+
 - **Referencia:** demanda observada 168 horas antes en la misma estación.
+
 - **Modelo evaluado:** CatBoost con 200 iteraciones, profundidad 6 y semilla 777.
+
 - **Métrica principal:** RMSE; como apoyo se registran MAE y MAE en horas con demanda positiva.
 
 ### 3.3 P2 — Clasificación de riesgo operativo
 
 - **Unidad de análisis:** estación-hora, incluyendo horas sin viajes entre la primera y la última aparición de cada estación.
+
 - **Objetivo:** clasificar las dos horas siguientes como `riesgo_vaciado`, `normal` o `riesgo_saturacion`.
+
 - **Presión futura:** suma del flujo neto de las dos horas siguientes dividida entre la capacidad de la estación.
+
 - **Umbrales:** cuantiles 10 % y 90 % calculados con entrenamiento, equivalentes a -0.1613 y 0.1579.
+
 - **Características:** calendario, capacidad, ubicación, entradas, salidas y flujo neto históricos, rezagos y promedios móviles. Las entradas, salidas y flujo de la hora que se desea clasificar no se usan como predictores; únicamente se emplea su información de calendario.
+
 - **Referencia:** clasificador aleatorio estratificado.
+
 - **Modelo evaluado:** regresión logística balanceada con semilla 777.
+
 - **Métrica principal:** F1 macro; como apoyo se registran exactitud, sensibilidad por clase, media geométrica y matrices de confusión.
 
 ### 3.4 P3 — Agrupamiento de estaciones
 
 - **Unidad de análisis:** estación.
+
 - **Objetivo:** identificar estaciones con patrones de uso parecidos.
+
 - **Características:** latitud, longitud, relación de salidas y entradas en horarios de mañana y tarde, proporción de uso en fin de semana y domingo, y rotación respecto a la capacidad.
+
 - **Preparación:** estandarización de características antes del agrupamiento.
+
 - **Modelo actual:** K-Means con `k=4`, diez inicializaciones y semilla 777.
+
 - **Métricas:** coeficiente de silueta, índice Davies-Bouldin e inercia.
+
 - **Artefacto:** mapa de estaciones coloreado por grupo.
 
-P3 constituye la referencia no supervisada actual. Una extensión futura es compararlo con agrupamiento aglomerativo y revisar la estabilidad de los grupos.
+La búsqueda de P3 compara K-Means con `k=3, 4, 5, 6` y agrupamiento aglomerativo con `k=4`. Los candidatos registrados son K-Means con `k=4` (`champion`) y `k=5` (`challenger`). Falta validar la estabilidad temporal y la interpretación operativa de los grupos.
 
-## 4. Flujo y arquitectura del experimento
+## 4. Flujo y arquitectura del sistema MLOps
+
+La solución separa la ingesta, la construcción de características y el modelado en módulos. MLflow registra parámetros, métricas, artefactos y versiones de los modelos para facilitar la trazabilidad y la reproducción de los experimentos.
 
 ```mermaid
-flowchart LR
-    A[Portal de datos abiertos MiBici] --> B[dataset.py: ingesta y validación]
-    B --> C[CSV en data/raw]
-    B --> D[33 Parquet de viajes y 1 de nomenclatura]
-    B --> E[data_manifest.json]
-    D --> F[train.py experimento-completo]
-    F --> G1[P1: tabla estación-hora y características históricas]
-    F --> G2[P2: features.py p2 y dataset_p2.parquet]
-    F --> G3[P3: perfil agregado por estación]
-    G1 --> H1[Referencia estacional y CatBoost]
-    G2 --> H2[Dummy estratificado y regresión logística]
-    G3 --> H3[K-Means]
-    E --> I[Versión común de datos]
-    I --> H1
-    I --> H2
-    I --> H3
-    H1 --> J[Experimento MLflow mibici-equipo51]
-    H2 --> J
-    H3 --> J
-    J --> K[Parámetros, métricas, etiquetas y artefactos]
+flowchart TD
+    subgraph S1["1. Fuentes y Descubrimiento"]
+        A["Portal de Datos Abiertos MiBici"] --> B["dataset.py: Ingesta, Validación y Manifiesto"]
+        B --> C["data_manifest.json (Hashes SHA-256)"]
+    end
+
+    subgraph S2["2. Almacenamiento Estructurado"]
+        B --> D1["Parquet Viajes (data/processed/trips/)"]
+        B --> D2["Parquet Nomenclatura (data/processed/nomenclature/)"]
+        D1 & D2 --> D3["features.py: características P1, P2 y P3; caché Parquet P1 y P2"]
+    end
+
+    subgraph S3["3. Orquestación y Reproducibilidad"]
+        E["MLproject (Entorno python_env.yaml)"] --> F1["Entry point: ingest"]
+        E --> F2["Entry point: train"]
+        E --> F3["Entry point: verify_registry"]
+    end
+
+    subgraph S4["4. Procesamiento, Feature Engineering y Modelado"]
+        D3 --> G1["P1: Demanda Horaria (Seasonal Naive, Ridge, CatBoost)"]
+        D3 --> G2["P2: Riesgo Operativo (Dummy Stratified, Regresión Logística SAGA)"]
+        D3 --> G3["P3: Agrupamiento Estaciones (K-Means, Agglomerative)"]
+    end
+
+    subgraph S5["5. MLflow Tracking Server Local"]
+        H1["Backend Store: SQLite (sqlite:///mlflow.db)"]
+        H2["Artifact Store: Local Root (./mlartifacts)"]
+        G1 & G2 & G3 --> H1 & H2
+        H1 & H2 --> I["Experimento Unificado: mibici-equipo51"]
+        I --> I1["Nested Runs (Parent: Grid Search / Child: Hiperparámetros)"]
+        I --> I2["Artefactos Estructurados: plots/, data/, config/"]
+        I --> I3["Firma de Modelo (Signature) y Ejemplo de Entrada (input_example)"]
+    end
+
+    subgraph S6["6. MLflow Model Registry y Gobernanza"]
+        I --> J1["mibici-equipo51-p1-demanda"]
+        I --> J2["mibici-equipo51-p2-riesgo"]
+        I --> J3["mibici-equipo51-p3-grupos"]
+        J1 & J2 & J3 --> K1["@champion (Candidato principal del experimento)"]
+        J1 & J2 & J3 --> K2["@challenger (Modelo Candidato de Comparación)"]
+    end
 ```
 
-El comando unificado realiza internamente estos pasos:
+### Herramientas utilizadas y justificación técnica
 
-1. P1 lee los Parquet, crea la tabla estación-hora, construye características, evalúa el baseline estacional Seasonal Naive (lag_168), lo compara con CatBoost y registra la evaluación final.
-2. P2 ejecuta `mibici_mlops.features p2`, crea el conjunto estación-hora, compara el Dummy con la regresión logística y registra la evaluación final.
-3. P3 vuelve a leer los Parquet y la nomenclatura, crea el perfil agregado por estación y ejecuta K-Means.
-4. Las tres preguntas usan el mismo manifiesto, semilla y experimento de MLflow.
-5. Cada paso se ejecuta como un proceso aislado. Si uno falla, la secuencia se detiene.
-
-### Herramientas utilizadas
-
-| Herramienta | Función en el proyecto | Motivo de uso |
+| Componente | Herramienta seleccionada | Justificación técnica y de negocio |
 | --- | --- | --- |
-| Cookiecutter Data Science | Organización del repositorio | Separa datos, código, modelos, reportes y notebooks |
-| pandas y PyArrow | Preparación y almacenamiento | Permiten transformar CSV y trabajar con Parquet de forma eficiente |
-| scikit-learn | Referencias, clasificación y agrupamiento | Ofrece interfaces consistentes y métricas reproducibles |
-| CatBoost | Modelo candidato de P1 | Modela relaciones no lineales en demanda temporal |
-| MLflow | Seguimiento experimental | Centraliza parámetros, métricas, etiquetas, artefactos y modelo |
-| skops | Serialización del modelo de P2 | Evita depender de formatos de serialización arbitraria |
-| pytest y Ruff | Validación automática | Revisan comportamiento crítico y calidad básica del código |
-| Git y GitHub | Versionado y colaboración | Vinculan cada corrida con el commit que la produjo |
+| **Estructura del proyecto** | Cookiecutter Data Science | Establece una separación estandarizada y modular entre datos, código fuente, modelos, reportes y pruebas, mitigando la deuda técnica oculta en ML (Sculley et al., 2015). |
+| **Almacenamiento y procesamiento** | Apache Parquet y PyArrow | Almacenamiento columnar comprimido por bloques que acelera lecturas selectivas de columnas y consultas por partición temporal, sin una medición comparativa de I/O documentada en esta entrega. |
+| **Ingeniería de datos y features** | pandas y NumPy | Transformación determinista y vectorizada de series de tiempo, agregaciones temporales, rezagos (`lags`) y ventanas móviles sin fuga de información del futuro. |
+| **Modelado de referencia y pipelines** | scikit-learn | Proporciona interfaces reproducibles (`Pipeline`, `ColumnTransformer`), validación temporal desacoplada y métricas robustas (`f1_score`, `silhouette_score`). |
+| **Modelado avanzado no lineal** | CatBoost Regressor | Capacidad nativa para variables categóricas, robustez ante sobreajuste mediante árboles simétricos oblícuos y eficiencia en relaciones no lineales complejas de demanda. |
+| **Orquestación de ejecución** | MLflow Project (`MLproject`) | Estandariza la ejecución mediante un manifiesto reproducible con entorno explícito (`python_env.yaml`), entry points parametrizados y desacoplamiento de la infraestructura. |
+| **Tracking Server y Metadatos** | MLflow Tracking + SQLite | Backend store relacional transaccional (ACID) que centraliza parámetros, métricas, tags obligatorios y artefactos versionados, con artefactos almacenados por separado en el sistema de archivos. |
+| **Registro y Gobernanza de Modelos** | MLflow Model Registry | Centraliza versiones, firmas de tipos, ejemplos de inferencia y asignación dinámica de **Aliases** (`@champion`, `@challenger`), facilitando la consulta del historial y la carga por alias. |
+| **Serialización segura de modelos** | skops | Formato usado para guardar una copia local del candidato principal de P2; permite inspeccionar tipos antes de cargar un archivo. |
+| **Calidad de software y pruebas** | pytest y Ruff | Pruebas unitarias automatizadas de preprocesamiento y contratos de datos, con linter ultrarrápido para cumplimiento estricto de PEP 8. |
+| **Versionado de código y trazabilidad** | Git y GitHub | Cada ejecución en MLflow almacena como tag el commit exacto de Git (`git_commit`), vinculando la corrida con una revisión del código; los cambios sin commit deben documentarse por separado. |
 
-## 5. Reproducir el experimento completo
+## 5. Reproducir el experimento completo con MLproject y MLflow
 
-### 5.1 Preparar el repositorio y el entorno
+El proyecto está diseñado para ejecutarse de punta a punta desde un clon limpio mediante `mlflow run`, sin intervención manual ni notebooks.
 
-Se requiere Git, Python 3.10 y espacio suficiente para descargar y procesar 33 meses de datos.
+### 5.1 Preparar el entorno local
+
+Se requiere Git y Python 3.10. Los comandos siguientes usan PowerShell en Windows:
 
 ```powershell
 git clone https://github.com/arictamir/TC5061-Proyecto-Equipo51.git
 cd TC5061-Proyecto-Equipo51
 py -3.10 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-python -m pip check
 ```
 
-### 5.2 Ejecutar las pruebas automatizadas — opcional
+### 5.2 Levantar el Tracking Server de MLflow con SQLite Backend Store
 
-Este paso es **opcional para reproducir el experimento**, porque las pruebas ya fueron ejecutadas y verificadas por el equipo. Se conserva para quien quiera comprobar nuevamente los componentes automatizados disponibles para P2:
+Siguiendo las mejores prácticas de MLOps, se utiliza SQLite como backend store de metadatos y un directorio local para artefactos (`./mlartifacts`):
+
+**Terminal A:**
+```powershell
+.\.venv\Scripts\Activate.ps1
+mlflow server --backend-store-uri sqlite:///mlflow.db --default-artifact-root ./mlartifacts --port 5000
+```
+
+> [!NOTE]
+> Dejar esta terminal abierta. La interfaz web de MLflow estará accesible en [http://localhost:5000](http://localhost:5000).
+
+### 5.3 Configurar la variable de entorno de Tracking
+
+En las terminales secundarias donde se ejecuten los pipelines o inferencia, configurar la variable de entorno para dirigir el tracking al servidor local:
+
+**Terminal B (PowerShell, desde la raíz del repositorio):**
+```powershell
+.\.venv\Scripts\Activate.ps1
+$env:MLFLOW_TRACKING_URI = "http://localhost:5000"
+```
+*(En Linux/macOS: `export MLFLOW_TRACKING_URI="http://localhost:5000"`)*
+
+### 5.4 Ejecución de punta a punta con MLproject (`mlflow run`)
+
+El archivo [`MLproject`](MLproject) expone puntos de entrada parametrizados. Estos comandos usan `--env-manager local` para reutilizar el entorno instalado; `python_env.yaml` describe el entorno para el gestor `virtualenv`.
+
+#### Paso 1: Ingesta, validación y control de versiones
+Descarga los 33 meses de MiBici, valida estructura, elimina duplicados exactos, genera archivos Parquet y crea `data_manifest.json`:
+```powershell
+mlflow run . -e ingest --env-manager local
+```
+
+#### Paso 2: Entrenamiento y registro de experimentos (P1, P2 y P3)
+Ejecuta la suite completa de experimentación: baselines, exploración de hiperparámetros con **Nested Runs**, generación de artefactos organizados (`plots/`, `data/`, `config/`), firmas, datasets y registro en Model Registry con aliases:
+```powershell
+mlflow run . -e train -P question=all -P stage=all -P register_models=true --env-manager local
+```
+
+*Opciones modulares por pregunta y etapa:*
+```powershell
+# Ejecutar únicamente P1 (Demanda horaria)
+mlflow run . -e train -P question=p1 -P stage=all --env-manager local
+
+# Ejecutar únicamente P2 (Riesgo operativo multiclase)
+mlflow run . -e train -P question=p2 -P stage=all --env-manager local
+
+# Ejecutar únicamente P3 (Agrupamiento de estaciones)
+mlflow run . -e train -P question=p3 -P stage=all --env-manager local
+```
+
+#### Paso 3: Verificación programática de modelos registrados
+Comprueba la disponibilidad del Model Registry, carga cada modelo con su alias `@champion` vía `mlflow.pyfunc.load_model` y valida la inferencia con ejemplos sintéticos:
+```powershell
+mlflow run . -e verify_registry --env-manager local --experiment-name mibici-equipo51
+```
+
+### 5.5 Ejecución de pruebas unitarias (opcional)
 
 ```powershell
 python -m pytest tests/test_features_p2.py tests/test_train_p2.py -v
 ```
 
-Las pruebas son pequeñas y no vuelven a descargar los datos ni ejecutan el entrenamiento completo.
+## 6. Experimentación avanzada y Tracking estructurado
 
-### 5.3 Terminal A: iniciar MLflow
+### 6.1 Búsqueda de hiperparámetros con Nested Runs (Corridas Anidadas)
 
-En la terminal actual, inicia MLflow y déjala abierta durante todo el experimento:
+Para cada una de las tres preguntas, la exploración de hiperparámetros se implementó bajo una jerarquía estricta de corridas anidadas en MLflow:
 
-```powershell
-python -m mlflow ui --host 127.0.0.1 --port 5000
+- **Run Padre (Parent Run):** Representa el espacio global de búsqueda (Grid Search / Exploración de algoritmos). Centraliza las etiquetas generales y el rango de hiperparámetros evaluados (`stage_of_work="search"`).
+
+- **Runs Hijos (Child Runs):** Ejecuciones individuales con `nested=True` que registran la combinación exacta de hiperparámetros (ej. profundidad, tasa de aprendizaje, regularización `C`, número de clusters `k`, algoritmo de enlace), junto con sus métricas de validación en P1 y P2, o métricas internas de agrupamiento en P3.
+
+### 6.2 Etiquetas obligatorias de gobernanza
+
+Las corridas de modelado del flujo `run-mlproject` registradas en el experimento `mibici-equipo51` incluyen los siguientes metadatos:
+
+- `question`: `p1`, `p2`, `p3`.
+
+- `model_family`: familia de algoritmo (`catboost`, `ridge`, `logistic_regression`, `dummy`, `kmeans`, `agglomerative`).
+
+- `stage_of_work`: fase del ciclo (`baseline`, `search`, `candidate`).
+
+- `team`: identificador del equipo (`equipo51`).
+
+- `git_commit`: hash SHA-1 exacto del commit en Git con el que se ejecutó el código.
+
+- Etiquetas complementarias: `rol_modelo`, `tipo_tarea`, `target`.
+
+### 6.3 Organización estructurada de artefactos en subcarpetas
+
+En todas las corridas candidatas (`candidate`), los artefactos se organizan rigurosamente en subcarpetas temáticas dentro de MLflow:
+
+- `plots/`: Gráficas de diagnóstico de desempeño:
+  - **P1:** Gráfica de Real vs. Predicho (`real_vs_predicho.png`) y gráfico de residuales (`grafico_residuales.png`).
+  - **P2:** Matriz de confusión multiclase (`matriz_confusion.png`) y curvas ROC One-vs-Rest (`curva_roc.png`).
+  - **P3:** Mapa de dispersión espacial de estaciones por cluster (`p3_clusters_spatial.png`) y gráfica de distribución de tamaño de clusters (`p3_clusters_distribucion.png`).
+
+- `data/`: Registro del dataset de evaluación y trazabilidad de insumos:
+  - Muestra de hasta 1,000 filas registrada mediante `mlflow.log_input(...)` y `mlflow.data.from_pandas`. El código actual usa el contexto `training`, incluso cuando la muestra proviene de evaluación; esta etiqueta requiere revisión. El registro aparece como entrada de la corrida, no como un archivo en `data/`.
+  - Copia del manifiesto oficial de versiones `data_manifest.json`.
+
+- `config/`: Archivo `run_config.json` con la configuración registrada para la corrida.
+
+### 6.4 Firmas de modelo (Signatures) y ejemplos de entrada (Input Examples)
+
+Cada modelo candidato registrado en MLflow cuenta con:
+
+- **Firma explícita (`ModelSignature`):** Inferida a partir de una muestra representativa de entrada y las predicciones correspondientes mediante `mlflow.models.infer_signature(input_example, predictions)`. La firma permite validar el esquema de entrada al cargar el modelo para inferencia.
+
+- **Ejemplo de entrada (`input_example`):** Primeras 5 filas de las características de prueba (P1 y P2) o de estaciones (P3), serializadas junto con el artefacto del modelo, permitiendo verificar y probar la inferencia de manera inmediata desde la interfaz web o mediante la API de serving de MLflow.
+
+### 6.5 Salvaguarda estricta de privacidad
+
+El diseño de las características reduce el uso de información personal en el modelado:
+
+- Las matrices de modelado y sus ejemplos de entrada excluyen las columnas personales (`usuario_id`, `genero`, `ano_de_nacimiento`).
+
+- Todas las matrices de entrenamiento y evaluación operan únicamente sobre agregaciones espacio-temporales anonimizadas a nivel estación-hora o perfiles agregados de estación.
+
+## 7. Model Registry y Gestión del Ciclo de Vida
+
+### 7.1 Modelos registrados en el catálogo
+
+Los candidatos definidos en el código se registran al ejecutar la etapa `candidate` con `register_models=true` en el MLflow Model Registry bajo nombres estandarizados:
+
+1. `mibici-equipo51-p1-demanda`: Modelo de regresión para predicción de demanda horaria por estación.
+2. `mibici-equipo51-p2-riesgo`: Modelo de clasificación multiclase para anticipar riesgo operativo (`riesgo_vaciado`, `normal`, `riesgo_saturacion`).
+3. `mibici-equipo51-p3-grupos`: Modelo de agrupamiento no supervisado para segmentación operativa de estaciones.
+
+### 7.2 Uso de aliases (`@champion` y `@challenger`)
+
+El código asigna `champion` al candidato principal y `challenger` al candidato de comparación de cada pregunta. Estos aliases apuntan a versiones del catálogo y permiten cargar modelos con una URI como `models:/mibici-equipo51-p1-demanda@champion`.
+
+La asignación está definida en `train.py`; no se promueve automáticamente al ganador de la búsqueda. Registrar un alias tampoco implica que exista un servicio desplegado. Un proceso futuro de promoción deberá establecer criterios de validación antes de reasignarlo.
+
+### 7.3 Inferencia y verificación programática
+
+Cualquier sistema cliente puede cargar y consultar los modelos registrados directamente por su alias:
+
+```python
+import mlflow.pyfunc
+from mibici_mlops.config import MLFLOW_TRACKING_URI
+
+mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
+# datos_estacion_hora debe contener las características esperadas por la firma.
+# Cargar el modelo Champion actual desde el Registry
+model_uri = "models:/mibici-equipo51-p1-demanda@champion"
+model = mlflow.pyfunc.load_model(model_uri)
+
+# Inferencia directa con validación de firma
+predicciones = model.predict(datos_estacion_hora)
 ```
 
-Abre [http://127.0.0.1:5000](http://127.0.0.1:5000) en el navegador.
-
-### 5.4 Terminal B: ejecutar la ingesta y el experimento
-
-Abre una segunda terminal en la raíz del repositorio, activa el mismo entorno y ejecuta:
+La suite incluye verificación automática del catálogo e inferencia con archivos CSV/Parquet o ejemplos sintéticos:
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m mibici_mlops.dataset
-python -m mibici_mlops.modeling.train experimento-completo
+# 1. Verificación programática de todos los modelos @champion
+python -m mibici_mlops.modeling.predict verify-registry
+# o mediante MLproject:
+mlflow run . -e verify_registry --env-manager local --experiment-name mibici-equipo51
+
+# 2. Inferencia con ejemplo sintético o archivo de características
+python -m mibici_mlops.modeling.predict predict --model-name mibici-equipo51-p1-demanda --alias champion
+python -m mibici_mlops.modeling.predict predict --model-name mibici-equipo51-p2-riesgo --alias champion --input-path data/processed/p2/dataset_p2.parquet --output-path predicciones_p2.parquet
 ```
 
-El primer comando descarga, limpia, valida y versiona las fuentes. El segundo ejecuta de manera secuencial la preparación y los modelos de P1, P2 y P3. No es necesario lanzar comandos separados para cada pregunta.
+## 8. Resultados comparativos y selección de modelos
 
-Al terminar deben existir seis corridas nuevas y exitosas:
+Las cifras siguientes corresponden a los resultados reportados por el equipo; esta revisión documental no volvió a ejecutar el entrenamiento. Deben contrastarse con los runs de MLflow de la entrega. La búsqueda de P1 y P2 entrena con muestras de hasta 200,000 y 150,000 filas, respectivamente; los candidatos usan el conjunto completo de entrenamiento. Los aliases de los candidatos están definidos en el código y no se asignan automáticamente al ganador de la búsqueda.
 
-1. `P1 - Baseline estacional - desarrollo`.
-2. `P1 - CatBoost - evaluación final`.
-3. `P2 - Dummy estratificado - desarrollo`.
-4. `P2 - Regresión logística - desarrollo`.
-5. `P2 - Regresión logística - evaluación final`.
-6. `P3 - KMeans - desarrollo`.
+### 8.1 Pregunta 1 (P1): Predicción de demanda horaria
 
-## 6. Archivos y artefactos generados
+*Tarea: Regresión temporal por estación-hora.*
+*Partición: Train (2024-01 a 2025-12), Val (2026-01 a 2026-04), Test (2026-05 a 2026-09).*
 
-Los datos y modelos grandes se generan localmente y se mantienen fuera de Git. Las figuras seleccionadas pueden incorporarse a la documentación, y la evidencia experimental también se registra en MLflow.
+| Rol / Etapa | Modelo | Hiperparámetros | Val MAE | Val RMSE | Test MAE | Test RMSE | Mejora RMSE de validación vs. baseline |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: |
+| **Baseline** | Seasonal Naive | Lag 168h (semana previa) | 0.9979 | 2.0318 | — | — | Referencia |
+| *Búsqueda* | Ridge | $\alpha=1.0$ | 0.8913 | 1.6141 | — | — | +20.56% |
+| *Búsqueda* | CatBoost (depth=4) | depth=4, lr=0.05, it=150 | 0.8572 | 1.5644 | — | — | +23.00% |
+| *Búsqueda* | CatBoost (depth=6) | depth=6, lr=0.10, it=200 | 0.8087 | 1.5290 | — | — | +24.74% |
+| *Búsqueda* | CatBoost (depth=8) | depth=8, lr=0.10, it=200 | 0.8180 | 1.5162 | — | — | +25.37% |
+| **Champion (@champion)** | CatBoost Regressor | depth=6, lr=0.10, it=200 | **0.7958** | **1.4425** | **0.7827** | **1.4206** | **+29.00%** |
+| **Challenger (@challenger)** | CatBoost Regressor | depth=4, lr=0.05, it=150 | 0.8541 | 1.5184 | 0.8326 | 1.4701 | +25.27% |
 
-| Etapa | Ruta o artefacto | Contenido |
-| --- | --- | --- |
-| Ingesta | `data/raw/*.csv` | 33 archivos mensuales y la nomenclatura original |
-| Ingesta | `data/processed/trips/*.parquet` | 33 archivos mensuales de viajes limpios |
-| Ingesta | `data/processed/nomenclature/nomenclatura_2026_09.parquet` | Nomenclatura limpia de estaciones |
-| Ingesta | `data_manifest.json` | Hashes, filas, URLs y versión reproducible |
-| P1 | Artefactos `baseline/` y `model/` en MLflow | Metadatos de la referencia y modelo CatBoost `.cbm` |
-| P2 | `data/processed/p2/dataset_p2.parquet` | Conjunto estación-hora con características, objetivo y partición |
-| P2 | `data/processed/p2/metricas_desarrollo.csv` | Comparación de referencia y modelo en entrenamiento y validación |
-| P2 | `data/processed/p2/metricas_finales.csv` | Métricas finales de entrenamiento, validación y prueba |
-| P2 | `reports/figures/p2/` | Matrices de confusión de desarrollo y evaluación final |
-| P2 | `models/p2/modelo_p2.skops` | Modelo final serializado |
-| P3 | `reports/figures/p3_clusters_spatial.png` | Mapa de estaciones por grupo |
-| Experimento | `mlruns/` y `mlartifacts/` | Almacenamiento local del servidor MLflow |
+**Decisión técnica y de negocio:**
+El candidato `champion` (CatBoost, profundidad 6 y 200 iteraciones) presenta un RMSE de validación de 1.4425 frente a 2.0318 del baseline: una reducción del 29.00 %. Su RMSE de prueba reportado es 1.4206. Los porcentajes de la tabla comparan exclusivamente RMSE de validación. El `challenger` usa profundidad 4 y 150 iteraciones; no se documentó una medición comparativa de latencia o memoria.
 
-P1 no conserva una copia adicional del modelo dentro de `models/`; su modelo se registra directamente como artefacto de MLflow. P3 conserva la visualización local y la registra junto con el manifiesto.
+### 8.2 Pregunta 2 (P2): Clasificación de riesgo operativo
 
-## 7. Trazabilidad en MLflow
+*Tarea: Clasificación multiclase (`riesgo_vaciado`, `normal`, `riesgo_saturacion`) para una ventana futura de 2 horas.*
+*Partición: Train (2024), Val (2025), Test (2026-01 a 2026-09).*
 
-Todas las corridas se guardan en el experimento `mibici-equipo51` y comparten una convención común.
+| Rol / Etapa | Modelo | Configuración | Val Accuracy | Val F1 Macro | Test Accuracy | Test F1 Macro | Recall Vaciado (val/test) | Recall Saturación (val/test) | G-Mean (val/test) |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| **Baseline** | Dummy Classifier | Stratified | 0.6614 | 0.3331 | — | — | 0.0995 | 0.1050 | 0.2025 |
+| *Búsqueda* | Regresión Logística | $C=0.01$, saga | 0.6030 | 0.4514 | — | — | 0.5258 | 0.4881 | 0.5436 |
+| *Búsqueda* | Regresión Logística | $C=0.1$, saga | 0.5878 | 0.4454 | — | — | 0.5388 | 0.5044 | 0.5475 |
+| *Búsqueda* | Regresión Logística | $C=1.0$, saga | 0.5852 | 0.4443 | — | — | 0.5403 | 0.5066 | 0.5477 |
+| *Búsqueda* | Regresión Logística | $C=10.0$, saga | 0.5850 | 0.4442 | — | — | 0.5404 | 0.5069 | 0.5477 |
+| **Champion (@champion)** | Regresión Logística | $C=1.0$, saga, balanced | 0.5556 | 0.4317 | **0.5558** | **0.4041** | **0.5331** | **0.5237** | **0.5390** |
+| **Challenger (@challenger)** | Regresión Logística | $C=0.1$, saga, balanced | 0.5612 | 0.4285 | 0.5590 | 0.3995 | 0.5298 | 0.5180 | 0.5342 |
 
-Parámetros mínimos:
+**Decisión técnica y de negocio:**
+Se priorizan F1 macro y sensibilidad por clase para evaluar la detección de las etiquetas de riesgo. Estas etiquetas representan presión futura de flujo, no incidentes confirmados de falta de bicicletas o anclajes.
 
-- `modelo`.
-- `semilla`.
-- `version_datos`.
+El código fija `C=1.0` como `champion` y `C=0.1` como `challenger`. La búsqueda reporta un F1 macro mayor con `C=0.01` (0.4514), pero usa una muestra de entrenamiento y 40 iteraciones. Esto no demuestra que `C=1.0` sea la mejor configuración global. Falta comparar las configuraciones con el mismo presupuesto de entrenamiento y elegir mediante validación, reservando prueba para la evaluación final.
 
-Etiquetas mínimas:
+En las filas de baseline y búsqueda, las sensibilidades y G-Mean corresponden a validación: el código de esas etapas no evalúa prueba. En los candidatos, las últimas tres columnas corresponden a prueba.
 
-- `equipo`.
-- `pregunta`.
-- `tipo_tarea`.
-- `etapa`.
-- `rol_modelo`.
-- `git_commit`.
+### 8.3 Pregunta 3 (P3): Agrupamiento no supervisado de estaciones
 
-Cada pregunta añade sus hiperparámetros y métricas específicas. Los artefactos incluyen, según corresponda, tablas de métricas, matrices de confusión, figuras, manifiesto de datos y modelos serializados.
+*Tarea: Segmentación de perfiles operativos de estaciones (7 variables normalizadas).*
+*Dataset: 471 estaciones evaluadas sobre el periodo histórico completo (2024-2026).*
 
-## 8. Resultados de referencia
+| Rol / Etapa | Algoritmo | Configuración | Silhouette Score | Davies-Bouldin Index | Inercia | Evaluación técnica |
+| --- | --- | --- | ---: | ---: | ---: | --- |
+| **Baseline** | K-Means | $k=4$, n_init=10 | 0.2479 | 1.3522 | 1765.43 | Segmentación operativa inicial de 4 perfiles |
+| *Búsqueda* | K-Means | $k=3$ | 0.2264 | 1.4822 | 2109.39 | Alternativa de tres grupos |
+| *Búsqueda* | K-Means | $k=4$ | 0.2479 | 1.3522 | 1765.43 | Configuración del candidato principal |
+| *Búsqueda* | K-Means | $k=5$ | 0.2752 | 1.2061 | 1479.70 | Mejor separación matemática de clústeres |
+| *Búsqueda* | K-Means | $k=6$ | 0.2666 | 1.1917 | 1345.15 | Alternativa de seis grupos |
+| *Búsqueda* | Agglomerative | $k=4$, ward linkage | 0.2139 | 1.4236 | — | Menor silueta que K-Means con k=4 |
+| **Champion (@champion)** | K-Means | $k=4$, n_init=10 | **0.2479** | **1.3522** | **1765.43** | **Candidato principal definido en el código** |
+| **Challenger (@challenger)** | K-Means | $k=5$, n_init=10 | 0.2752 | 1.2061 | 1479.70 | Candidato con mayor separación geométrica |
 
-### P1 — Predicción de demanda
+**Decisión técnica y de negocio:**
+El código fija K-Means con `k=4` como `champion` y `k=5` como `challenger`. Las métricas reportadas favorecen `k=5` en silueta y Davies-Bouldin frente a `k=4`. Mantener cuatro grupos es una decisión de configuración que requiere justificar su utilidad mediante perfiles de características y revisión operativa. La asociación de grupos con zonas laborales, residenciales, recreativas o universitarias sigue siendo una hipótesis por validar.
 
-| Modelo | Conjunto | RMSE | MAE | MAE con demanda positiva |
-| --- | --- | ---: | ---: | ---: |
-| Referencia estacional | Validación | 2.0318 | 0.9979 | — |
-| CatBoost | Validación | 1.4425 | 0.7958 | 1.3167 |
-| CatBoost | Prueba | 1.4206 | 0.7827 | 1.3141 |
+## 9. Evidencia de la ejecución en MLflow Tracking UI
 
-CatBoost reduce el error frente a la referencia estacional en validación y mantiene un resultado parecido en prueba.
+A continuación se presentan las capturas de pantalla de la interfaz de MLflow (http://localhost:5000) ubicadas en `reports/figures/evidences/week6/` que respaldan la ejecución completa de la entrega:
 
-### P2 — Clasificación de riesgo operativo
+### Figura 1. Vista jerárquica de Nested Runs (Búsqueda de hiperparámetros)
+Muestra el Parent Run con sus Child Runs anidados, evidenciando las variaciones de parámetros y métricas resultantes en P1, P2 y P3.
 
-| Modelo | Conjunto | Exactitud | F1 macro | Sensibilidad vaciado | Sensibilidad saturación | Media geométrica |
-| --- | --- | ---: | ---: | ---: | ---: | ---: |
-| Dummy estratificado | Validación | 0.6614 | 0.3331 | 0.0995 | 0.1050 | 0.2025 |
-| Regresión logística | Validación | 0.5556 | 0.4317 | 0.5601 | 0.5377 | 0.5516 |
-| Regresión logística | Prueba | 0.5558 | 0.4041 | 0.5331 | 0.5237 | 0.5390 |
+![Vista jerárquica de Nested Runs en MLflow UI](reports/figures/evidences/week6/captura1_tracking_nested_runs.png)
 
-Aunque el clasificador de referencia obtiene mayor exactitud por el desbalance, la regresión logística mejora F1 macro, la media geométrica y el reconocimiento de ambas clases de riesgo. Por eso fue seleccionada mediante validación y después evaluada en prueba.
+### Figura 2. Vista de Artefactos de un Candidate Run
+Muestra la organización rigurosa de artefactos en las subcarpetas plots/ (gráficas diagnósticas), data/ (manifiesto de datos e input dataset) y config/ (parámetros de configuración), así como la firma inferida (Signature) y el ejemplo de entrada (input_example).
 
-### P3 — Agrupamiento de estaciones
+![Vista de Artefactos en subcarpetas con firma y ejemplo en MLflow UI](reports/figures/evidences/week6/captura2_artefactos_firma_modelo.png)
 
-| Modelo | Estaciones | k | Silhouette | Davies-Bouldin | Inercia |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| K-Means | 471 | 4 | 0.2479 | 1.3522 | 1765.43 |
+### Figura 3. Vista de Model Registry con Aliases (@champion y @challenger)
+Muestra los tres modelos registrados (mibici-equipo51-p1-demanda, mibici-equipo51-p2-riesgo, mibici-equipo51-p3-grupos) con sus respectivas versiones y los aliases dinámicos asignados para gobernanza.
 
-La separación es moderada: los grupos ofrecen una primera descripción operativa, pero deben interpretarse junto con sus perfiles y no como categorías definitivas.
-
-## 9. Evidencia de la corrida final
-
-Las siguientes capturas documentan las seis corridas generadas por `experimento-completo`, la trazabilidad de una corrida, un artefacto registrado y la comparación de ejecuciones en MLflow.
-
-### Figura 1. Lista de corridas del experimento
- 
-![Lista de las seis corridas del experimento en MLflow, con sus nombres y estado Finished](reports/figures/evidences/ejecuciones.png)
- 
-### Figura 2. Detalle de una corrida
- 
-![Parámetros, métricas y etiquetas de una corrida, incluido git_commit](reports/figures/evidences/detalle_run.png)
- 
-### Figura 3. Artefacto registrado
- 
-![Artefacto registrado en MLflow, como una matriz de confusión o modelo serializado](reports/figures/p2/figuras_finales/matriz_final_prueba.png)
- 
-### Figura 4. Comparación de corridas
- 
-![Comparación de ejecuciones](reports/figures/evidences/comparacion_runs.png)
+![Vista de Model Registry con Aliases @champion y @challenger en MLflow UI](reports/figures/evidences/week6/captura3_model_registry.png)
 
 ## 10. Organización del repositorio
 
@@ -322,6 +484,7 @@ TC5061-Proyecto-Equipo51/
 │   ├── raw/                              # CSV descargados; ignorados por Git
 │   └── processed/                        # Datos procesados; ignorados por Git
 │       ├── trips/                        # 33 Parquet mensuales de viajes
+│       ├── p1_features.parquet            # Caché de características de P1
 │       ├── nomenclature/                 # Parquet de estaciones
 │       └── p2/                           # Dataset y métricas de P2
 ├── docs/                                 # Sitio de documentación con MkDocs
@@ -329,24 +492,30 @@ TC5061-Proyecto-Equipo51/
 │   │   ├── getting-started.md
 │   │   └── index.md
 │   └── mkdocs.yml
+├── MLproject                             # Especificación MLproject con entry points (ingest, train, verify_registry, predict)
+├── python_env.yaml                       # Especificación de entorno Python con versiones fijadas
 ├── mibici_mlops/
 │   ├── modeling/
-│   │   ├── predict.py                    # Plantilla para inferencia
-│   │   └── train.py                      # P1, P2, P3 y ejecución unificada
+│   │   ├── predict.py                    # Inferencia en lote y verificación programática (@champion / @challenger)
+│   │   └── train.py                      # Entrenamiento modular, Nested Runs y Model Registry para P1, P2 y P3
 │   ├── config.py                         # Rutas, periodos, semilla y configuración común
 │   ├── dataset.py                        # Ingesta, limpieza, validación y manifiesto
 │   ├── features.py                       # Características de las tres preguntas
 │   └── plots.py                          # Utilidades gráficas
 ├── models/
-│   └── p2/modelo_p2.skops                # Modelo local generado; ignorado por Git
+│   └── p2/modelo_p2.skops                 # Modelo local generado; ignorado por Git
 ├── notebooks/
 │   ├── 1.0-gd-exploracion-p1.ipynb
-│   ├── 2.0-ih-p2-eda.ipynb
+│   ├── 1.0-ih-p2-eda.ipynb
 │   └── 1.0-at-exploracion-p3-clustering.ipynb
 ├── references/                           # ML Canvas y arquitectura versionados
 ├── reports/
 │   └── figures/
 │       ├── p2/                           # Matrices de confusión generadas por P2
+│       ├── evidences/week6/               # Capturas de MLflow
+│       ├── p1_champion/ y p1_challenger/   # Diagnósticos de P1
+│       ├── p2_champion/ y p2_challenger/   # Diagnósticos de P2
+│       ├── p3_champion/ y p3_challenger/   # Mapas y perfiles de P3
 │       └── p3_clusters_spatial.png       # Mapa local generado por P3
 ├── tests/
 │   ├── test_features_p2.py
@@ -358,34 +527,52 @@ TC5061-Proyecto-Equipo51/
 └── README.md
 ```
 
-Las carpetas internas mostradas para datos, modelos y artefactos aparecen después de ejecutar el flujo. Sus contenidos, junto con `mlruns/` y `mlartifacts/`, se excluyen mediante `.gitignore`. El repositorio conserva código, configuración, pruebas, documentación y metadatos reproducibles.
+Las carpetas internas mostradas para datos y modelos se completan después de ejecutar el flujo. Los datos y modelos generados, junto con `mlruns/`, `mlartifacts/` y `mlflow.db`, se excluyen mediante `.gitignore`. Las figuras y capturas de `reports/figures/` sí se conservan en Git. El repositorio conserva código, configuración, pruebas, documentación y metadatos reproducibles.
 
 ## 11. Limitaciones y trabajo futuro
 
 - Los modelos no incorporan clima, eventos, cierres viales ni festivos externos.
+
 - P2 aproxima el riesgo mediante el flujo de viajes y la capacidad; no observa el inventario real de bicicletas y anclajes en cada momento.
+
 - La regresión logística alcanzó el límite de iteraciones configurado; conviene revisar convergencia, escalado e hiperparámetros sin volver a consultar prueba.
-- P3 usa actualmente K-Means como referencia. Falta comparar formalmente un segundo algoritmo y validar la estabilidad de los grupos.
+
+- P3 ya compara K-Means y agrupamiento aglomerativo. Falta validar la estabilidad temporal de los grupos y justificar su interpretación operativa.
+
 - Los datos terminan en septiembre de 2026; se requiere monitoreo temporal para detectar cambios posteriores.
+
 - Un uso operativo necesitaría automatización, monitoreo de calidad y una interfaz para consumir predicciones y segmentos.
 
 ## 12. Referencias
 
 - Apache Software Foundation. (s. f.). *Reading and writing the Apache Parquet format*. Apache Arrow. Recuperado el 17 de octubre de 2026, de [https://arrow.apache.org/docs/python/parquet/index.html](https://arrow.apache.org/docs/python/parquet/index.html)
-- Cookiecutter Data Science. (s. f.). *Cookiecutter Data Science*. [https://cookiecutter-data-science.drivendata.org/](https://cookiecutter-data-science.drivendata.org/)
+
 - Dorard, L. (2016, 18 de noviembre). *From data to AI with the Machine Learning Canvas (Part I)*. Medium. [https://medium.com/louis-dorard/from-data-to-ai-with-the-machine-learning-canvas-part-i-d171b867b047](https://medium.com/louis-dorard/from-data-to-ai-with-the-machine-learning-canvas-part-i-d171b867b047)
+
 - DrivenData. (s. f.). *Cookiecutter Data Science*. Recuperado el 17 de octubre de 2026, de [https://cookiecutter-data-science.drivendata.org/](https://cookiecutter-data-science.drivendata.org/)
+
 - Equipo 51. (2026). *TC5061-Proyecto-Equipo51* [Repositorio de GitHub]. GitHub. [https://github.com/arictamir/TC5061-Proyecto-Equipo51](https://github.com/arictamir/TC5061-Proyecto-Equipo51)
+
 - Géron, A. (2019). *Hands-on machine learning with Scikit-Learn, Keras, and TensorFlow* (2.ª ed.). O’Reilly Media. [https://www.oreilly.com/library/view/hands-on-machine-learning/9781492032632/](https://www.oreilly.com/library/view/hands-on-machine-learning/9781492032632/)
+
 - Lauchande, N. (2021). *Machine learning engineering with MLflow: Manage the end-to-end machine learning life cycle with MLflow*. Packt Publishing. [https://www.packtpub.com/en-us/product/machine-learning-engineering-with-mlflow-9781800560796](https://www.packtpub.com/en-us/product/machine-learning-engineering-with-mlflow-9781800560796)
+
 - Mi Bici. (s. f.-a). *Aviso de privacidad*. Recuperado el 17 de octubre de 2026, de [https://mibici.net/es/aviso-de-privacidad/](https://mibici.net/es/aviso-de-privacidad/)
+
 - Mi Bici. (s. f.-b). *Datos abiertos*. Recuperado el 17 de octubre de 2026, de [https://mibici.net/es/datos-abiertos/](https://mibici.net/es/datos-abiertos/)
+
 - MLflow. (s. f.). *ML experiment tracking*. Recuperado el 17 de octubre de 2026, de [https://mlflow.org/docs/latest/ml/tracking/](https://mlflow.org/docs/latest/ml/tracking/)
+
 - Scikit-learn developers. (s. f.-a). *DummyClassifier*. Scikit-learn. Recuperado el 17 de octubre de 2026, de [https://scikit-learn.org/stable/modules/generated/sklearn.dummy.DummyClassifier.html](https://scikit-learn.org/stable/modules/generated/sklearn.dummy.DummyClassifier.html)
+
 - Scikit-learn developers. (s. f.-b). *LogisticRegression*. Scikit-learn. Recuperado el 17 de octubre de 2026, de [https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html](https://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html)
+
 - Scikit-learn developers. (s. f.-c). *Metrics and scoring: Quantifying the quality of predictions*. Scikit-learn. Recuperado el 17 de octubre de 2026, de [https://scikit-learn.org/stable/modules/model_evaluation.html](https://scikit-learn.org/stable/modules/model_evaluation.html)
+
 - Sculley, D., Holt, G., Golovin, D., Davydov, E., Phillips, T., Ebner, D., Chaudhary, V., Young, M., Crespo, J. F., & Dennison, D. (2015). *Hidden technical debt in machine learning systems*. Advances in Neural Information Processing Systems, 28. [https://papers.nips.cc/paper_files/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html](https://papers.nips.cc/paper_files/paper/2015/hash/86df7dcfd896fcaf2674f757a2463eba-Abstract.html)
+
 - Skops developers. (s. f.). *Secure persistence with skops*. Recuperado el 17 de octubre de 2026, de [https://skops.readthedocs.io/en/stable/persistence.html](https://skops.readthedocs.io/en/stable/persistence.html)
+
 - Treveil, M., Omont, N., Stenac, C., Lefevre, K., Phan, D., Zentici, J., Lavoillotte, A., Miyazaki, M., & Heidmann, L. (2020). *Introducing MLOps: How to scale machine learning in the enterprise*. O’Reilly Media. [https://www.oreilly.com/library/view/introducing-mlops/9781492083283/](https://www.oreilly.com/library/view/introducing-mlops/9781492083283/)
 
 ### Uso de herramientas de inteligencia artificial generativa
