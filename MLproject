@@ -22,3 +22,11 @@ entry_points:
 
   verify_registry:
     command: "python -m mibici_mlops.modeling.predict verify-registry"
+
+  predict:
+    parameters:
+      model_name: {type: string, default: "mibici-equipo51-p1-demanda"}
+      alias: {type: string, default: "champion"}
+      input_path: {type: string, default: ""}
+      output_path: {type: string, default: ""}
+    command: "python -m mibici_mlops.modeling.predict predict --model-name {model_name} --alias {alias} --input-path '{input_path}' --output-path '{output_path}'"
