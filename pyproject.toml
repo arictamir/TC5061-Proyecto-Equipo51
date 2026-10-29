@@ -30,3 +30,12 @@ extend-select = ["I"]  # Add import sorting
 known-first-party = ["mibici_mlops"]
 force-sort-within-sections = true
 
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q"
+testpaths = ["tests"]
+markers = [
+    "unit: pruebas unitarias aisladas de funciones y componentes",
+    "integration: pruebas de integracion entre modulos y artefactos",
+    "data_quality: pruebas de validacion de esquema, integridad y calidad de datos",
+]
