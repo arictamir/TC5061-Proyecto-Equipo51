@@ -1,4 +1,5 @@
-"""Pruebas pequeñas para las transformaciones de P2."""
+# TODO - Gabriela - pasar a tests/test_features.py las pruebas unitarias de features P2 que estaban aquí.
+# """Pruebas pequeñas para las transformaciones de P2."""
 
 import pandas as pd
 import pytest
