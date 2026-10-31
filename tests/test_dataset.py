@@ -9,11 +9,28 @@ Cubre:
 """
 
 import hashlib
+import json
 from pathlib import Path
 
+import numpy as np
+
+# Compatibilidad de NumPy 2.x con DeepChecks
+if not hasattr(np, "Inf"):
+    np.Inf = np.inf
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
+
+from deepchecks.tabular import Dataset
+from deepchecks.tabular.checks import (
+    DataDuplicates,
+    MixedDataTypes,
+    PercentOfNulls,
+)
 import pandas as pd
 import pytest
 
+from mibici_mlops import dataset as dataset_module
+from mibici_mlops import quality as quality_module
 from mibici_mlops.dataset import (
     calculate_dataset_version,
     calculate_sha256,
@@ -24,7 +41,12 @@ from mibici_mlops.dataset import (
     validate_nomenclature,
     validate_trips,
 )
-
+from mibici_mlops.quality import (
+    remove_invalid_trip_durations,
+    run_feature_drift_check,
+    run_nomenclature_quality_checks,
+    run_trip_quality_checks,
+)
 
 # ============================================================================
 # 1. VALIDACIÓN DE ESQUEMAS Y TIPOS DE DATOS
@@ -179,19 +201,10 @@ def test_filter_invalid_durations_and_dates(sample_trips_with_anomalies_df: pd.D
     Criterio de aceptación: El conjunto limpio descarta viajes con Fin_del_viaje <= Inicio_del_viaje.
     """
     df = clean_trips(sample_trips_with_anomalies_df)
+    df_filtrado, filas_invalidas = remove_invalid_trip_durations(df)
 
-    duracion_segundos = (df["fin_del_viaje"] - df["inicio_del_viaje"]).dt.total_seconds()
-
-    # Identificar viajes válidos: duración positiva (> 0) y razonable (< 24 horas)
-    viajes_validos_mask = (duracion_segundos > 0) & (duracion_segundos <= 24 * 3600)
-    df_filtrado = df.loc[viajes_validos_mask].copy()
-
-    # El registro 201 (duración negativa) y 202 (duración cero) y 203 (>48h) deben identificarse
-    assert (duracion_segundos.loc[0]) < 0  # 201: negativo
-    assert (duracion_segundos.loc[1]) == 0  # 202: cero
-    assert (duracion_segundos.loc[2]) > 24 * 3600  # 203: >24h
-
-    assert len(df_filtrado) == 0  # Ninguna anomalía supera el filtro operativo
+    assert filas_invalidas == 3
+    assert df_filtrado.empty
 
 
 # ============================================================================
@@ -232,3 +245,279 @@ def test_ingestion_idempotency_and_parquet_generation(
     # Verificar que el archivo Parquet resultante es 100% idéntico
     df_leido = pd.read_parquet(parquet_out)
     pd.testing.assert_frame_equal(df1, df_leido)
+
+
+@pytest.mark.integration
+@pytest.mark.data_quality
+def test_ingestion_runs_checks_and_documents_cleaning_actions(
+    tmp_path: Path,
+    sample_raw_trips_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """La ingesta reporta problemas antes de deduplicar y persiste solo datos limpios."""
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    processed_dir = tmp_path / "processed"
+    report_dir = tmp_path / "quality"
+    raw_file = raw_dir / "sample_trips.csv"
+
+    duplicate = sample_raw_trips_df.iloc[[0]]
+    invalid_duration = sample_raw_trips_df.iloc[[1]].copy()
+    invalid_duration.loc[:, "Viaje_Id"] = 999
+    invalid_duration.loc[:, "Fin_del_viaje"] = "2024-01-01 08:00:00"
+    source_df = pd.concat(
+        [sample_raw_trips_df, duplicate, invalid_duration],
+        ignore_index=True,
+    )
+    source_df.to_csv(raw_file, index=False)
+
+    monkeypatch.setattr(
+        dataset_module,
+        "build_trip_filenames",
+        lambda *_args: [raw_file.name],
+    )
+    monkeypatch.setattr(dataset_module, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(dataset_module, "PROCESSED_DATA_DIR", processed_dir)
+    monkeypatch.setattr(quality_module, "DATA_QUALITY_DIR", report_dir)
+
+    output_files = dataset_module.process_trip_files()
+
+    assert len(output_files) == 1
+    processed_df = pd.read_parquet(output_files[0])
+    assert len(processed_df) == len(sample_raw_trips_df)
+
+    report = json.loads((report_dir / "sample_trips.json").read_text("utf-8"))
+    assert report["status"] == "warning"
+    assert report["metrics"]["exact_duplicate_rows"] == 1
+    assert report["metrics"]["invalid_duration_rows"] == 1
+    assert report["metrics"]["rows_after_cleaning"] == len(sample_raw_trips_df)
+    assert report["actions"][0]["removed_rows"] == 1
+    assert report["actions"][1]["removed_rows"] == 1
+    assert "1001" not in json.dumps(report)
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_trip_quality_blocks_critical_nulls_and_writes_report(
+    tmp_path: Path,
+    sample_raw_trips_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Los nulos críticos detienen el flujo y dejan evidencia resumida."""
+    monkeypatch.setattr(quality_module, "DATA_QUALITY_DIR", tmp_path)
+    trips = clean_trips(sample_raw_trips_df)
+    trips.loc[0, "viaje_id"] = np.nan
+
+    with pytest.raises(ValueError, match="null values in critical columns"):
+        run_trip_quality_checks(trips, "invalid_trips.csv")
+
+    report = json.loads((tmp_path / "invalid_trips.json").read_text("utf-8"))
+    assert report["status"] == "failed"
+    assert report["metrics"]["critical_null_counts"]["viaje_id"] == 1
+    assert "1001" not in json.dumps(report)
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_nomenclature_quality_blocks_duplicate_station_ids(
+    tmp_path: Path,
+    sample_nomenclatura_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DeepChecks detects duplicate station identifiers in the live ingestion check."""
+    monkeypatch.setattr(quality_module, "DATA_QUALITY_DIR", tmp_path)
+    stations = clean_nomenclature(sample_nomenclatura_df)
+    stations.loc[1, "station_id"] = stations.loc[0, "station_id"]
+
+    with pytest.raises(ValueError, match="Duplicate station IDs"):
+        run_nomenclature_quality_checks(stations, "stations.csv")
+
+    report = json.loads((tmp_path / "stations.json").read_text("utf-8"))
+    assert report["status"] == "failed"
+    assert report["metrics"]["duplicate_station_ids"] == 1
+
+
+@pytest.mark.integration
+@pytest.mark.data_quality
+def test_nomenclature_ingestion_generates_quality_report(
+    tmp_path: Path,
+    sample_nomenclatura_df: pd.DataFrame,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    processed_dir = tmp_path / "processed"
+    report_dir = tmp_path / "quality"
+    filename = "sample_stations.csv"
+    sample_nomenclatura_df.to_csv(raw_dir / filename, index=False)
+
+    monkeypatch.setattr(dataset_module, "RAW_DATA_DIR", raw_dir)
+    monkeypatch.setattr(dataset_module, "PROCESSED_DATA_DIR", processed_dir)
+    monkeypatch.setattr(dataset_module, "NOMENCLATURE_FILE", filename)
+    monkeypatch.setattr(quality_module, "DATA_QUALITY_DIR", report_dir)
+
+    output_file = dataset_module.process_nomenclature()
+
+    assert output_file.exists()
+    report = json.loads((report_dir / "sample_stations.json").read_text("utf-8"))
+    assert report["status"] == "passed"
+    assert report["metrics"]["rows"] == len(sample_nomenclatura_df)
+
+
+# ============================================================================
+# 5. VALIDACIÓN DE CALIDAD CON DEEPCHECKS
+# ============================================================================
+ 
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_valores_faltantes(
+    sample_raw_trips_df: pd.DataFrame,
+) -> None:
+    """Valida que DeepChecks detecte valores faltantes."""
+    check = (
+        PercentOfNulls()
+        .add_condition_percent_of_nulls_not_greater_than(
+            threshold=0.0,
+        )
+    )
+
+    dataset_limpio = Dataset(
+        sample_raw_trips_df,
+        cat_features=["Genero"],
+    )
+    resultado_limpio = check.run(dataset_limpio)
+
+    assert resultado_limpio.passed_conditions()
+
+    datos_con_nulo = sample_raw_trips_df.copy()
+    datos_con_nulo["Usuario_Id"] = datos_con_nulo[
+        "Usuario_Id"
+    ].astype("float64")
+    datos_con_nulo.loc[0, "Usuario_Id"] = np.nan
+
+    dataset_con_nulo = Dataset(
+        datos_con_nulo,
+        cat_features=["Genero"],
+    )
+    resultado_con_nulo = check.run(dataset_con_nulo)
+
+    assert not resultado_con_nulo.passed_conditions()
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_registros_duplicados(
+    sample_raw_trips_df: pd.DataFrame,
+) -> None:
+    """Valida que DeepChecks detecte registros duplicados."""
+    check = DataDuplicates().add_condition_ratio_less_or_equal(0)
+
+    dataset_limpio = Dataset(
+        sample_raw_trips_df,
+        cat_features=["Genero"],
+    )
+    resultado_limpio = check.run(dataset_limpio)
+
+    assert resultado_limpio.passed_conditions()
+
+    datos_duplicados = pd.concat(
+        [
+            sample_raw_trips_df,
+            sample_raw_trips_df.iloc[[0]],
+        ],
+        ignore_index=True,
+    )
+    dataset_duplicado = Dataset(
+        datos_duplicados,
+        cat_features=["Genero"],
+    )
+    resultado_duplicado = check.run(dataset_duplicado)
+
+    assert not resultado_duplicado.passed_conditions()
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_tipos_de_datos_consistentes(
+    sample_raw_trips_df: pd.DataFrame,
+) -> None:
+    """Valida que una columna no mezcle números y cadenas."""
+    check = (
+        MixedDataTypes(columns=["Ano_de_nacimiento"])
+        .add_condition_rare_type_ratio_not_in_range()
+    )
+
+    dataset_limpio = Dataset(
+        sample_raw_trips_df,
+        cat_features=["Genero"],
+    )
+    resultado_limpio = check.run(dataset_limpio)
+
+    assert resultado_limpio.passed_conditions()
+
+    datos_contaminados = pd.concat(
+        [sample_raw_trips_df] * 4,
+        ignore_index=True,
+    )
+    datos_contaminados["Ano_de_nacimiento"] = (
+        datos_contaminados["Ano_de_nacimiento"].astype(object)
+    )
+    datos_contaminados.loc[
+        0,
+        "Ano_de_nacimiento",
+    ] = "desconocido"
+
+    dataset_contaminado = Dataset(
+        datos_contaminados,
+        cat_features=["Genero"],
+    )
+    resultado_contaminado = check.run(dataset_contaminado)
+
+    assert not resultado_contaminado.passed_conditions()
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_drift_entre_entrenamiento_y_prueba(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valida drift entre splits y registra sus resultados resumidos."""
+    monkeypatch.setattr(quality_module, "DATA_QUALITY_DIR", tmp_path)
+    duraciones = np.linspace(5.0, 60.0, num=60)
+
+    train_df = pd.DataFrame(
+        {
+            "duracion_minutos": duraciones,
+            "viajes_por_hora": np.tile(
+                np.arange(6, dtype="float64"),
+                10,
+            ),
+        }
+    )
+    test_sin_drift_df = train_df.copy()
+
+    test_con_drift_df = train_df.copy()
+    test_con_drift_df["duracion_minutos"] += 200.0
+
+    report_sin_drift = run_feature_drift_check(
+        train_df,
+        test_sin_drift_df,
+        ["duracion_minutos", "viajes_por_hora"],
+        [],
+        "no_drift",
+    )
+    report_con_drift = run_feature_drift_check(
+        train_df,
+        test_con_drift_df,
+        ["duracion_minutos", "viajes_por_hora"],
+        [],
+        "with_drift",
+    )
+    report_json = json.loads((tmp_path / "with_drift.json").read_text("utf-8"))
+
+    assert report_sin_drift["status"] == "passed"
+    assert report_con_drift["status"] == "warning"
+    assert report_json["metrics"]["sample_size_per_split"] == 60
+    assert not report_json["checks"]["feature_drift"]["passed"]
