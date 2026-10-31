@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 # ============================================================================
-# SECCIÓN 1: FIXTURES DE INGESTA Y CALIDAD DE DATOS (Ariadna)
+# SECCIÓN 1: FIXTURES DE INGESTA Y CALIDAD DE DATOS
 # ============================================================================
 
 
@@ -20,19 +20,19 @@ def sample_raw_trips_df() -> pd.DataFrame:
     Viaje_Id, Usuario_Id, Genero, Ano_de_nacimiento, Inicio_del_viaje,
     Fin_del_viaje, Origen_Id, Destino_Id.
     """
-    # TODO - Ariadna - Generar DataFrame sintético de viajes con columnas originales y tipos válidos
     return pd.DataFrame(
         {
-            "Viaje_Id": [101, 102, 103, 104, 105],
-            "Usuario_Id": [1001, 1002, 1003, 1004, 1005],
-            "Genero": ["M", "F", "M", "F", "M"],
-            "Ano_de_nacimiento": [1990, 1985, 1995, 2000, 1992],
+            "Viaje_Id": [101, 102, 103, 104, 105, 106],
+            "Usuario_Id": [1001, 1002, 1003, 1004, 1005, 1006],
+            "Genero": ["M", "F", "M", "F", "M", "F"],
+            "Ano_de_nacimiento": [1990, 1985, 1995, 2000, 1992, 1988],
             "Inicio_del_viaje": [
                 "2024-01-01 08:00:00",
                 "2024-01-01 08:15:00",
                 "2024-01-01 09:00:00",
                 "2024-01-01 09:30:00",
                 "2024-01-01 10:00:00",
+                "2024-01-01 10:15:00",
             ],
             "Fin_del_viaje": [
                 "2024-01-01 08:20:00",
@@ -40,9 +40,10 @@ def sample_raw_trips_df() -> pd.DataFrame:
                 "2024-01-01 09:25:00",
                 "2024-01-01 09:45:00",
                 "2024-01-01 10:18:00",
+                "2024-01-01 10:30:00",
             ],
-            "Origen_Id": [2, 3, 2, 4, 3],
-            "Destino_Id": [3, 2, 4, 2, 2],
+            "Origen_Id": [2, 3, 2, 4, 3, 4],
+            "Destino_Id": [3, 2, 4, 2, 2, 3],
         }
     )
 
@@ -50,15 +51,13 @@ def sample_raw_trips_df() -> pd.DataFrame:
 @pytest.fixture
 def sample_nomenclatura_df() -> pd.DataFrame:
     """Fixture de catálogo de estaciones con coordenadas válidas del AMG."""
-    # TODO - Ariadna - Crear DataFrame sintético de nomenclatura con identificadores y coordenadas
     return pd.DataFrame(
         {
             "id": [2, 3, 4],
             "name": ["Estacion 2", "Estacion 3", "Estacion 4"],
-            "obcn": ["GDL-002", "GDL-003", "GDL-004"],
             "latitude": [20.6750, 20.6780, 20.6720],
             "longitude": [-103.3550, -103.3600, -103.3500],
-            "slots": [16, 20, 14],
+            "capacity": [16, 20, 14],
         }
     )
 
@@ -66,14 +65,12 @@ def sample_nomenclatura_df() -> pd.DataFrame:
 @pytest.fixture
 def sample_corrupt_csv_content() -> str:
     """Fixture que emula un archivo CSV corrupto con campos truncados o delimitadores erróneos."""
-    # TODO - Ariadna - Definir contenido de texto malformado para pruebas de tolerancia a fallos
     return "Viaje_Id,Usuario_Id,Genero\n101,1001,M\n102,CORRUPT_ROW_MISSING_FIELDS\n"
 
 
 @pytest.fixture
 def sample_trips_with_anomalies_df() -> pd.DataFrame:
     """Fixture con viajes anómalos (duración negativa, duraciones extremas o nulos)."""
-    # TODO - Ariadna - Crear registros con anomalías temporales para probar filtros de limpieza
     return pd.DataFrame(
         {
             "Viaje_Id": [201, 202, 203],
@@ -84,10 +81,10 @@ def sample_trips_with_anomalies_df() -> pd.DataFrame:
                 "2024-01-01 10:00:00",
             ],
             "Fin_del_viaje": [
-                "2024-01-01 08:10:00",
-                "2024-01-01 09:00:00",
-                "2024-01-03 12:00:00",
-            ],  # Negativo, cero y >48h
+                 "2024-01-01 08:10:00",  # Duración negativa: -20 min
+                "2024-01-01 09:00:00",  # Duración cero: 0 min
+                "2024-01-03 12:00:00",  # Duración extrema: >48 horas
+            ],
             "Origen_Id": [2, 3, 4],
             "Destino_Id": [3, 2, 2],
         }
