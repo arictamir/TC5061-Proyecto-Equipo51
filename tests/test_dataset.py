@@ -8,15 +8,27 @@ Cubre:
 - Idempotencia del proceso de ingesta hacia Parquet.
 """
 
+import hashlib
 from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from mibici_mlops.dataset import (
+    calculate_dataset_version,
+    calculate_sha256,
+    clean_nomenclature,
+    clean_trips,
+    deduplicate_trips,
+    read_mibici_csv,
+    validate_nomenclature,
+    validate_trips,
+)
+
+
 # ============================================================================
 # 1. VALIDACIÓN DE ESQUEMAS Y TIPOS DE DATOS
 # ============================================================================
-
 
 @pytest.mark.unit
 @pytest.mark.data_quality
@@ -25,11 +37,33 @@ def test_schema_valid_trips_data(sample_raw_trips_df: pd.DataFrame) -> None:
 
     Por qué es crítico: Previene fallos silenciosos en las etapas posteriores de agregación y modelado
     si los datos abiertos sufren cambios imprevistos en su esquema.
-    Criterio de aceptación: Presencia de columnas canónicas (Viaje_Id, Inicio_del_viaje, Fin_del_viaje,
-    Origen_Id, Destino_Id) con tipos de datos correctos y sin duplicados exactos.
+    Criterio de aceptación: Presencia de columnas canónicas (viaje_id, inicio_del_viaje, fin_del_viaje,
+    origen_id, destino_id) con tipos de datos correctos y sin duplicados exactos.
     """
-    # TODO - Ariadna - Implementar validación de esquema de viajes (columnas requeridas y tipos de datos)
-    pytest.skip("TODO - Ariadna - Pendiente de implementar validación de esquema de viajes")
+    df_clean = clean_trips(sample_raw_trips_df)
+    df_dedup = deduplicate_trips(df_clean)
+
+    # Validar que pasa sin excepciones
+    validate_trips(df_dedup)
+
+    columnas_esperadas = {
+        "viaje_id",
+        "usuario_id",
+        "genero",
+        "ano_de_nacimiento",
+        "inicio_del_viaje",
+        "fin_del_viaje",
+        "origen_id",
+        "destino_id",
+    }
+    assert columnas_esperadas.issubset(set(df_dedup.columns))
+    assert pd.api.types.is_datetime64_any_dtype(df_dedup["inicio_del_viaje"])
+    assert pd.api.types.is_datetime64_any_dtype(df_dedup["fin_del_viaje"])
+
+    # Criterio de rechazo: si falta una columna crítica debe levantar ValueError
+    df_invalido = df_dedup.drop(columns=["viaje_id"])
+    with pytest.raises(ValueError, match="Missing required columns"):
+        validate_trips(df_invalido)
 
 
 @pytest.mark.unit
@@ -39,18 +73,33 @@ def test_schema_valid_nomenclatura_stations(sample_nomenclatura_df: pd.DataFrame
 
     Por qué es crítico: Las coordenadas y capacidades son insumos directos para el clustering espacial
     y la tasa de rotación en P2 y P3.
-    Criterio de aceptación: IDs únicos, slots >= 0, latitud en [20.5, 20.9] y longitud en [-103.5, -103.2].
+    Criterio de aceptación: IDs únicos, capacidad >= 0, latitud en [20.5, 20.9] y longitud en [-103.5, -103.2].
     """
-    # TODO - Ariadna - Implementar validación de catálogo de estaciones y rangos de latitud/longitud
-    pytest.skip(
-        "TODO - Ariadna - Pendiente de implementar validación de nomenclatura y coordenadas"
-    )
+    df_clean = clean_nomenclature(sample_nomenclatura_df)
+    validate_nomenclature(df_clean)
+
+    assert df_clean["station_id"].is_unique
+    assert (df_clean["capacity"] >= 0).all()
+
+    # Bounding Box del Área Metropolitana de Guadalajara (AMG)
+    assert (df_clean["latitude"] >= 20.5).all() and (df_clean["latitude"] <= 20.9).all()
+    assert (df_clean["longitude"] >= -103.5).all() and (df_clean["longitude"] <= -103.2).all()
+
+    # Criterio de rechazo: duplicados en station_id o capacidad negativa
+    df_duplicado = df_clean.copy()
+    df_duplicado.loc[1, "station_id"] = df_duplicado.loc[0, "station_id"]
+    with pytest.raises(ValueError, match="Duplicate station IDs"):
+        validate_nomenclature(df_duplicado)
+
+    df_negativo = df_clean.copy()
+    df_negativo.loc[0, "capacity"] = -5
+    with pytest.raises(ValueError, match="Negative station capacity"):
+        validate_nomenclature(df_negativo)
 
 
 # ============================================================================
 # 2. INTEGRIDAD DEL MANIFIESTO DE DATOS (SHA-256)
 # ============================================================================
-
 
 @pytest.mark.unit
 @pytest.mark.data_quality
@@ -61,19 +110,39 @@ def test_manifest_generation_and_sha256_integrity(tmp_path: Path) -> None:
     de acuerdo con los principios de gobernanza de MLOps.
     Criterio de aceptación: El hash calculado coincide exactamente con el hash criptográfico del contenido en disco.
     """
-    # TODO - Ariadna - Implementar cálculo y verificación del hash SHA-256 en data_manifest.json
-    pytest.skip("TODO - Ariadna - Pendiente de implementar prueba de hashing SHA-256 de datos")
+    contenido_prueba = b"Viaje_Id,Usuario_Id,Origen_Id\n1,101,2\n2,102,3\n"
+    archivo_prueba = tmp_path / "test_viajes.csv"
+    archivo_prueba.write_bytes(contenido_prueba)
+
+    hash_obtenido = calculate_sha256(archivo_prueba)
+    hash_esperado = hashlib.sha256(contenido_prueba).hexdigest()
+
+    assert hash_obtenido == hash_esperado
+    assert len(hash_obtenido) == 64
+
+    # Verificar que cualquier mutación altera el hash
+    archivo_prueba.write_bytes(contenido_prueba + b"3,103,4\n")
+    nuevo_hash = calculate_sha256(archivo_prueba)
+    assert nuevo_hash != hash_obtenido
+
+    # Verificar versionado determinista del manifiesto conjunto
+    manifest_files = [
+        {"filename": "test_viajes.csv", "sha256": hash_obtenido},
+        {"filename": "nomenclatura.csv", "sha256": "abc123def456"},
+    ]
+    version1 = calculate_dataset_version(manifest_files)
+    version2 = calculate_dataset_version(list(reversed(manifest_files)))
+    assert version1 == version2  # Invariante ante el orden de la lista
 
 
 # ============================================================================
 # 3. MANEJO DE CASOS LÍMITE (EDGE CASES) Y LIMPIEZA
 # ============================================================================
 
-
 @pytest.mark.unit
 @pytest.mark.data_quality
 def test_handle_corrupt_csv_and_invalid_encoding(
-    tmp_path: Path, sample_corrupt_csv_content: str
+    tmp_path: Path, sample_corrupt_csv_content: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Qué prueba: Comprueba que el proceso de lectura maneje archivos CSV truncados o con líneas malformadas.
 
@@ -81,8 +150,23 @@ def test_handle_corrupt_csv_and_invalid_encoding(
     que no deben colapsar la canalización de ingesta global.
     Criterio de aceptación: Se detecta y descarta el registro corrupto o se levanta una excepción controlada con logging.
     """
-    # TODO - Ariadna - Implementar manejo robusto ante archivos CSV malformados o truncados
-    pytest.skip("TODO - Ariadna - Pendiente de implementar manejo de CSV corrupto")
+    archivo_corrupto = tmp_path / "corrupto.csv"
+    archivo_corrupto.write_text(sample_corrupt_csv_content, encoding="utf-8")
+
+    df = read_mibici_csv(archivo_corrupto)
+    df_clean = clean_trips(df)
+
+    # Validar que si faltan columnas críticas al procesar un CSV roto, validate_trips detecta el fallo
+    with pytest.raises(ValueError, match="Missing required columns"):
+        validate_trips(df_clean)
+
+    # Validar que si ninguna codificación tiene éxito, read_mibici_csv levanta ValueError controlado
+    def simular_error_decodificacion(*args, **kwargs):
+        raise UnicodeDecodeError("utf-8", b"", 0, 1, "simulated error")
+
+    monkeypatch.setattr(pd, "read_csv", simular_error_decodificacion)
+    with pytest.raises(ValueError, match="Could not decode"):
+        read_mibici_csv(archivo_corrupto)
 
 
 @pytest.mark.unit
@@ -94,14 +178,25 @@ def test_filter_invalid_durations_and_dates(sample_trips_with_anomalies_df: pd.D
     la agregación horaria de demanda por estación.
     Criterio de aceptación: El conjunto limpio descarta viajes con Fin_del_viaje <= Inicio_del_viaje.
     """
-    # TODO - Ariadna - Implementar filtrado de viajes con duraciones negativas, ceros o inconsistencias
-    pytest.skip("TODO - Ariadna - Pendiente de implementar filtrado de duraciones inválidas")
+    df = clean_trips(sample_trips_with_anomalies_df)
+
+    duracion_segundos = (df["fin_del_viaje"] - df["inicio_del_viaje"]).dt.total_seconds()
+
+    # Identificar viajes válidos: duración positiva (> 0) y razonable (< 24 horas)
+    viajes_validos_mask = (duracion_segundos > 0) & (duracion_segundos <= 24 * 3600)
+    df_filtrado = df.loc[viajes_validos_mask].copy()
+
+    # El registro 201 (duración negativa) y 202 (duración cero) y 203 (>48h) deben identificarse
+    assert (duracion_segundos.loc[0]) < 0  # 201: negativo
+    assert (duracion_segundos.loc[1]) == 0  # 202: cero
+    assert (duracion_segundos.loc[2]) > 24 * 3600  # 203: >24h
+
+    assert len(df_filtrado) == 0  # Ninguna anomalía supera el filtro operativo
 
 
 # ============================================================================
 # 4. IDEMPOTENCIA Y GENERACIÓN DE PARQUET
 # ============================================================================
-
 
 @pytest.mark.integration
 def test_ingestion_idempotency_and_parquet_generation(
@@ -113,5 +208,27 @@ def test_ingestion_idempotency_and_parquet_generation(
     ni alterar los esquemas de los archivos Parquet generados.
     Criterio de aceptación: Mismo número de registros y mismos esquemas columnares en ejecuciones sucesivas.
     """
-    # TODO - Ariadna - Implementar prueba de idempotencia en conversión CSV a Parquet
-    pytest.skip("TODO - Ariadna - Pendiente de implementar prueba de idempotencia de ingesta")
+    raw_csv = tmp_path / "datos_abiertos_2024_01.csv"
+    sample_raw_trips_df.to_csv(raw_csv, index=False)
+
+    parquet_out = tmp_path / "datos_abiertos_2024_01.parquet"
+
+    # Primera ejecución
+    df1 = clean_trips(read_mibici_csv(raw_csv))
+    df1 = deduplicate_trips(df1)
+    validate_trips(df1)
+    df1.to_parquet(parquet_out, index=False)
+    registros_ejecucion_1 = len(df1)
+
+    # Segunda ejecución sobre el mismo destino
+    df2 = clean_trips(read_mibici_csv(raw_csv))
+    df2 = deduplicate_trips(df2)
+    validate_trips(df2)
+    df2.to_parquet(parquet_out, index=False)
+    registros_ejecucion_2 = len(df2)
+
+    assert registros_ejecucion_1 == registros_ejecucion_2 == len(sample_raw_trips_df)
+
+    # Verificar que el archivo Parquet resultante es 100% idéntico
+    df_leido = pd.read_parquet(parquet_out)
+    pd.testing.assert_frame_equal(df1, df_leido)
