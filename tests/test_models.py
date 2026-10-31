@@ -32,8 +32,9 @@ def test_p1_champion_model_signature(
     contenga exactamente las 11 columnas con sus tipos requeridos antes de ejecutar la predicción.
     Criterio de aceptación: La firma requiere 11 variables de entrada numéricas y produce una salida escalar continua.
     """
-    preds = np.clip(mock_champion_p1_model.predict(sample_p1_inference_payload), 0, None)
-    signature: ModelSignature = infer_signature(sample_p1_inference_payload, preds)
+    input_example = sample_p1_inference_payload.astype("float64")
+    preds = np.clip(mock_champion_p1_model.predict(input_example), 0, None)
+    signature: ModelSignature = infer_signature(input_example, preds)
 
     # Validar 11 columnas en el esquema de entrada
     input_names = [col.name for col in signature.inputs.inputs]
@@ -84,8 +85,9 @@ def test_p2_champion_model_signature(
     versiones en el MLflow Model Registry bajo el alias @champion.
     Criterio de aceptación: La firma valida las características de entrada y produce salida categórica.
     """
-    preds = mock_champion_p2_model.predict(sample_p2_inference_payload)
-    signature = infer_signature(sample_p2_inference_payload, preds)
+    input_example = sample_p2_inference_payload.astype("float64")
+    preds = mock_champion_p2_model.predict(input_example)
+    signature = infer_signature(input_example, preds)
 
     input_names = [col.name for col in signature.inputs.inputs]
     assert set(input_names) == set(COLUMNAS_CARACTERISTICAS_P2)
