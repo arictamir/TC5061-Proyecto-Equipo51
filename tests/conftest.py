@@ -98,14 +98,13 @@ def sample_trips_with_anomalies_df() -> pd.DataFrame:
 
 @pytest.fixture
 def sample_p1_hourly_demand_df() -> pd.DataFrame:
-    """Fixture de demanda horaria continua (al menos 200 horas) para probar lags de P1."""
-    # TODO - Gabriela - Generar serie temporal horaria sintética para estación única con >=200 horas
+    """Fixture de demanda horaria continua (200 horas) para probar lags de P1."""
     fechas = pd.date_range("2024-01-01 00:00:00", periods=200, freq="h")
     return pd.DataFrame(
         {
             "station_id": [2] * len(fechas),
             "hour": fechas,
-            "demand_trips": [i % 7 for i in range(len(fechas))],
+            "trips_started": [(i * 3 + 1) % 11 for i in range(len(fechas))],
         }
     )
 
@@ -113,7 +112,6 @@ def sample_p1_hourly_demand_df() -> pd.DataFrame:
 @pytest.fixture
 def sample_p2_station_hourly_df() -> pd.DataFrame:
     """Fixture de entradas, salidas y capacidad horaria para probar objetivo de 2h de P2."""
-    # TODO - Gabriela - Crear serie horaria de balance y flujos netos para clasificación de presión
     fechas = pd.date_range("2024-01-01 00:00:00", periods=10, freq="h")
     return pd.DataFrame(
         {
@@ -129,18 +127,17 @@ def sample_p2_station_hourly_df() -> pd.DataFrame:
 @pytest.fixture
 def sample_p3_station_aggregated_df() -> pd.DataFrame:
     """Fixture de métricas consolidadas por estación para construir las 7 features de P3."""
-    # TODO - Gabriela - Generar DataFrame sintético de perfiles operativos agregados para clustering P3
     return pd.DataFrame(
         {
-            "estacion_id": [2, 3, 4],
-            "latitude": [20.6750, 20.6780, 20.6720],
-            "longitude": [-103.3550, -103.3600, -103.3500],
-            "prop_manana": [0.35, 0.20, 0.45],
-            "prop_tarde": [0.40, 0.50, 0.30],
-            "prop_fin_semana": [0.25, 0.30, 0.25],
-            "prop_domingo": [0.12, 0.15, 0.10],
-            "rotacion_diaria": [2.5, 1.8, 3.2],
-        }
+            "latitude": [20.6750, 20.6780, 20.6720, 20.6800],
+            "longitude": [-103.3550, -103.3600, -103.3500, -103.3650],
+            "ratio_am": [1.25, 0.80, 1.10, 0.95],
+            "ratio_pm": [0.90, 1.30, 0.85, 1.15],
+            "pct_fin_semana": [0.28, 0.22, 0.25, 0.30],
+            "pct_domingo": [0.14, 0.10, 0.12, 0.15],
+            "rotacion_capacidad": [2.10, 1.50, 3.20, 1.80],
+        },
+        index=[2, 3, 4, 5],
     )
 
 
