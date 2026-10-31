@@ -4,8 +4,17 @@ Provee datos sintéticos mínimos, reproducibles y rápidos para evitar dependen
 de archivos Parquet pesados o llamadas a servicios externos en pruebas unitarias.
 """
 
+from catboost import CatBoostRegressor
+import numpy as np
 import pandas as pd
 import pytest
+from sklearn.cluster import KMeans
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+
+from mibici_mlops.config import SEMILLA_ALEATORIA
+from mibici_mlops.features import COLUMNAS_CARACTERISTICAS_P2
 
 # ============================================================================
 # SECCIÓN 1: FIXTURES DE INGESTA Y CALIDAD DE DATOS
@@ -145,11 +154,9 @@ def sample_p3_station_aggregated_df() -> pd.DataFrame:
 # SECCIÓN 3: FIXTURES DE CONTRATOS, FIRMAS E INFERENCIA (Ingrid)
 # ============================================================================
 
-
 @pytest.fixture
 def sample_p1_inference_payload() -> pd.DataFrame:
     """Fixture con las 11 features requeridas por el contrato de entrada de P1 (CatBoost)."""
-    # TODO - Ingrid - Definir DataFrame con tipos exactos de las 11 features del modelo P1
     return pd.DataFrame(
         {
             "station_id": [2, 3],
@@ -170,39 +177,90 @@ def sample_p1_inference_payload() -> pd.DataFrame:
 @pytest.fixture
 def sample_p2_inference_payload() -> pd.DataFrame:
     """Fixture con las features de entrada para el modelo Champion de P2 (Regresión Logística)."""
-    # TODO - Ingrid - Definir DataFrame con features numéricas y categóricas para P2
-    return pd.DataFrame(
-        {
-            "capacidad": [16, 20],
-            "latitude": [20.6750, 20.6780],
-            "longitude": [-103.3550, -103.3600],
-            "flujo_neto_t_1": [-2, 3],
-            "flujo_neto_t_2": [1, 2],
-            "flujo_neto_media_3h": [-0.33, 1.67],
-            "entradas_media_3h": [2.0, 4.0],
-            "salidas_media_3h": [2.33, 2.33],
-            "hora_sin": [0.866, -0.965],
-            "hora_cos": [-0.5, -0.258],
-            "dia_sin": [0.781, -0.433],
-            "dia_cos": [0.623, -0.900],
-            "mes_sin": [0.866, 0.866],
-            "mes_cos": [0.5, 0.5],
-        }
-    )
+    filas = 5
+    datos = {col: [i * 1.5 for i in range(filas)] for col in COLUMNAS_CARACTERISTICAS_P2}
+    datos["capacidad"] = [16, 20, 14, 18, 22]
+    datos["latitud"] = [20.6750, 20.6780, 20.6720, 20.6800, 20.6710]
+    datos["longitud"] = [-103.3550, -103.3600, -103.3500, -103.3650, -103.3580]
+    datos["hora"] = [8, 12, 14, 18, 20]
+    datos["dia_semana"] = [0, 1, 2, 3, 4]
+    datos["mes"] = [3, 3, 3, 3, 3]
+    datos["es_fin_semana"] = [0, 0, 0, 0, 0]
+    return pd.DataFrame(datos)
 
 
 @pytest.fixture
-def sample_p3_inference_payload() -> pd.DataFrame:
-    """Fixture con las 7 features normalizadas para el modelo Champion P3 (K-Means)."""
-    # TODO - Ingrid - Definir DataFrame con las 7 variables escaladas de P3
-    return pd.DataFrame(
-        {
-            "latitude_scaled": [0.2, 0.5],
-            "longitude_scaled": [-0.1, 0.3],
-            "ratio_salidas_entradas_manana": [1.2, 0.8],
-            "ratio_salidas_entradas_tarde": [0.9, 1.4],
-            "prop_fin_semana": [0.28, 0.22],
-            "prop_domingo": [0.14, 0.10],
-            "rotacion_capacidad": [2.1, 1.5],
-        }
+def sample_p3_inference_payload(sample_p3_station_aggregated_df: pd.DataFrame) -> pd.DataFrame:
+    """Fixture con las 7 features para el modelo Champion P3 (K-Means)."""
+    return sample_p3_station_aggregated_df.copy()
+
+
+@pytest.fixture
+def mock_champion_p1_model(sample_p1_inference_payload: pd.DataFrame) -> CatBoostRegressor:
+    """Modelo sintético Champion P1 (CatBoost) entrenado en memoria para pruebas de inferencia."""
+    X = sample_p1_inference_payload.copy()
+    y = np.array([3.0, 7.0])
+    cb = CatBoostRegressor(
+        iterations=5,
+        depth=2,
+        learning_rate=0.1,
+        loss_function="RMSE",
+        random_seed=SEMILLA_ALEATORIA,
+        verbose=0,
     )
+    cb.fit(X, y)
+    return cb
+
+
+@pytest.fixture
+def mock_champion_p2_model(sample_p2_inference_payload: pd.DataFrame) -> Pipeline:
+    """Pipeline sintético Champion P2 (Logistic Regression) entrenado en memoria para contratos."""
+    X = sample_p2_inference_payload.copy()
+    # Generar al menos un ejemplo para cada una de las 3 clases operativas
+    y = np.array(
+        [
+            "riesgo_vaciado",
+            "normal",
+            "riesgo_saturacion",
+            "normal",
+            "riesgo_vaciado",
+        ]
+    )
+    pipe = Pipeline(
+        [
+            ("escalador", StandardScaler()),
+            (
+                "clasificador",
+                LogisticRegression(
+                    C=1.0,
+                    solver="lbfgs",
+                    max_iter=100,
+                    class_weight="balanced",
+                    random_state=SEMILLA_ALEATORIA,
+                ),
+            ),
+        ]
+    )
+    pipe.fit(X, y)
+    return pipe
+
+
+@pytest.fixture
+def mock_champion_p3_model(sample_p3_inference_payload: pd.DataFrame) -> Pipeline:
+    """Pipeline sintético Champion P3 (K-Means k=4) entrenado en memoria para clustering."""
+    X = sample_p3_inference_payload.copy()
+    pipe = Pipeline(
+        [
+            ("escalador", StandardScaler()),
+            (
+                "kmeans",
+                KMeans(
+                    n_clusters=4,
+                    random_state=SEMILLA_ALEATORIA,
+                    n_init=5,
+                ),
+            ),
+        ]
+    )
+    pipe.fit(X)
+    return pipe
