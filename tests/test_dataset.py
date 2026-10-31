@@ -12,13 +12,20 @@ import hashlib
 import json
 from pathlib import Path
 
+import numpy as np
+
+# Compatibilidad de NumPy 2.x con DeepChecks
+if not hasattr(np, "Inf"):
+    np.Inf = np.inf
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
+
 from deepchecks.tabular import Dataset
 from deepchecks.tabular.checks import (
     DataDuplicates,
     MixedDataTypes,
     PercentOfNulls,
 )
-import numpy as np
 import pandas as pd
 import pytest
 

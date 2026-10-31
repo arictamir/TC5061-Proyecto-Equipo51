@@ -3,6 +3,7 @@
 from contextlib import nullcontext
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 from typer.testing import CliRunner
@@ -80,6 +81,33 @@ def test_dummy_es_estratificado_y_reproducible() -> None:
 
     assert modelo.strategy == "stratified"
     assert modelo.random_state == SEMILLA_ALEATORIA
+
+
+def test_reproducibilidad_entrenamiento_misma_semilla() -> None:
+    """Verifica que dos entrenamientos con la misma semilla produzcan idénticas predicciones y métricas."""
+    dataset = crear_dataset_desarrollo_minimo()
+    conjuntos = separar_variables(dataset)
+    x_train, y_train = conjuntos["entrenamiento"]
+    x_val, y_val = conjuntos["validacion"]
+
+    # Ejecución 1
+    modelo1 = crear_regresion_logistica(solver=SolverRegresion.LBFGS)
+    modelo1.fit(x_train, y_train)
+    preds1 = modelo1.predict(x_val)
+    probas1 = modelo1.predict_proba(x_val)
+    metricas1 = calcular_metricas(y_val, pd.Series(preds1, index=y_val.index))
+
+    # Ejecución 2 (independiente con misma semilla)
+    modelo2 = crear_regresion_logistica(solver=SolverRegresion.LBFGS)
+    modelo2.fit(x_train, y_train)
+    preds2 = modelo2.predict(x_val)
+    probas2 = modelo2.predict_proba(x_val)
+    metricas2 = calcular_metricas(y_val, pd.Series(preds2, index=y_val.index))
+
+    # Criterio estricto de reproducibilidad de predicciones y métricas
+    np.testing.assert_array_equal(preds1, preds2)
+    np.testing.assert_allclose(probas1, probas2, atol=1e-7)
+    assert metricas1 == metricas2
 
 
 def test_regresion_logistica_utiliza_solver_seleccionado() -> None:

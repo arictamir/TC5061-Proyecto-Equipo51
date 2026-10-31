@@ -1,3 +1,4 @@
+bandit==1.9.4
 beautifulsoup4==4.15.0
 catboost==1.2.10
 deepchecks==0.19.1
@@ -8,14 +9,16 @@ mkdocs==1.6.1
 mlflow==3.16.1
 pandas==2.3.3
 pip==26.2.1
+pip-audit==2.10.1
 pyarrow==25.0.1
 pytest==9.1.1
 python-dotenv==1.2.4
+requests==2.34.2
 ruff==0.17.1
 scikit-learn==1.7.2
+seaborn==0.13.2
+setuptools<70
+skops==0.16.0
 tqdm==4.70.1
 typer==0.27.3
-requests==2.34.2
-seaborn==0.13.2
-skops==0.16.0
 -e .
