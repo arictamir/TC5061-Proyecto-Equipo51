@@ -12,6 +12,7 @@ pip==26.2.1
 pip-audit==2.10.1
 pyarrow==25.0.1
 pytest==9.1.1
+pytest-cov==7.1.0
 python-dotenv==1.2.4
 requests==2.34.2
 ruff==0.17.1

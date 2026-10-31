@@ -236,7 +236,7 @@ flowchart TD
 | **Tracking Server y Metadatos** | MLflow Tracking + SQLite | Backend store relacional transaccional (ACID) que centraliza parámetros, métricas, tags obligatorios y artefactos versionados, con artefactos almacenados por separado en el sistema de archivos. |
 | **Registro y Gobernanza de Modelos** | MLflow Model Registry | Centraliza versiones, firmas de tipos, ejemplos de inferencia y asignación dinámica de **Aliases** (`@champion`, `@challenger`), facilitando la consulta del historial y la carga por alias. |
 | **Serialización segura de modelos** | skops | Formato usado para guardar una copia local del candidato principal de P2; permite inspeccionar tipos antes de cargar un archivo. |
-| **Calidad de software y pruebas** | pytest y Ruff | Pruebas unitarias automatizadas de preprocesamiento y contratos de datos, con linter ultrarrápido para cumplimiento estricto de PEP 8. |
+| **Calidad de software y pruebas** | pytest y Ruff | Pruebas automatizadas de preprocesamiento y contratos de datos, con Ruff para verificar convenciones de estilo y formato. |
 | **Versionado de código y trazabilidad** | Git y GitHub | Cada ejecución en MLflow almacena como tag el commit exacto de Git (`git_commit`), vinculando la corrida con una revisión del código; los cambios sin commit deben documentarse por separado. |
 
 ## 5. Reproducir el experimento completo con MLproject y MLflow
