@@ -91,6 +91,79 @@ def test_regresion_logistica_utiliza_solver_seleccionado() -> None:
     assert clasificador.class_weight == "balanced"
 
 
+def test_ejecutar_p1_y_p2_comparan_drift_sin_incluir_objetivos(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llamadas = []
+    feature_columns_p1 = [
+        "station_id",
+        "hour_of_day",
+        "day_of_week",
+        "is_weekend",
+        "month",
+        "lag_1",
+        "lag_24",
+        "lag_168",
+        "rolling_mean_3h",
+        "rolling_mean_24h",
+        "history_hours",
+    ]
+    train_p1 = pd.DataFrame(
+        {column: list(range(12)) for column in feature_columns_p1}
+    )
+    train_p1["hour"] = pd.date_range("2024-01-01", periods=12, freq="h")
+    train_p1["trips_started"] = list(range(12))
+    val_p1 = train_p1.copy()
+    test_p1 = train_p1.copy()
+
+    train_p2 = pd.DataFrame(
+        {
+            column: list(range(12))
+            for column in COLUMNAS_CARACTERISTICAS_P2
+        }
+    )
+    train_p2["clase_riesgo"] = ["normal"] * 12
+    val_p2 = train_p2.copy()
+    test_p2 = train_p2.copy()
+
+    monkeypatch.setattr(train, "configurar_mlflow", lambda: None)
+    monkeypatch.setattr(train, "obtener_commit_git", lambda: "test-commit")
+    monkeypatch.setattr(
+        train,
+        "cargar_version_datos",
+        lambda: "test-dataset-version",
+    )
+    monkeypatch.setattr(
+        train,
+        "cargar_datos_p1",
+        lambda: (train_p1, val_p1, test_p1, feature_columns_p1),
+    )
+    monkeypatch.setattr(
+        train,
+        "cargar_datos_p2",
+        lambda: (train_p2, val_p2, test_p2),
+    )
+    monkeypatch.setattr(
+        train,
+        "run_feature_drift_check",
+        lambda train_features, test_features, features, categories, name: (
+            llamadas.append(
+                (train_features, test_features, features, categories, name)
+            )
+        ),
+    )
+
+    train.ejecutar_p1(stage="none")
+    train.ejecutar_p2(stage="none")
+
+    assert [llamada[4] for llamada in llamadas] == [
+        "p1_feature_drift",
+        "p2_feature_drift",
+    ]
+    assert "trips_started" not in llamadas[0][2]
+    assert "clase_riesgo" not in llamadas[1][2]
+
+
 def test_comando_rechaza_solver_no_permitido() -> None:
     resultado = runner.invoke(app, ["comparar", "--solver", "invalido"])
 

@@ -99,6 +99,7 @@ from mibici_mlops.plots import (
     plot_p3_cluster_distribution,
     plot_p3_spatial_clusters,
 )
+from mibici_mlops.quality import run_feature_drift_check
 
 plt.switch_backend("Agg")
 
@@ -374,6 +375,14 @@ def ejecutar_p1(
         train_df[c] = train_df[c].astype(str)
         val_df[c] = val_df[c].astype(str)
         test_df[c] = test_df[c].astype(str)
+
+    run_feature_drift_check(
+        train_df[feature_cols],
+        test_df[feature_cols],
+        feature_cols,
+        cat_cols,
+        "p1_feature_drift",
+    )
 
     X_train, y_train = train_df[feature_cols], train_df[target]
     X_val, y_val = val_df[feature_cols], val_df[target]
@@ -1077,6 +1086,14 @@ def ejecutar_p2(stage: str = "all", register_models: bool = True) -> None:
     )
     X_val, y_val = val_df[COLUMNAS_CARACTERISTICAS_P2], val_df[COLUMNA_OBJETIVO].astype(str)
     X_test, y_test = test_df[COLUMNAS_CARACTERISTICAS_P2], test_df[COLUMNA_OBJETIVO].astype(str)
+
+    run_feature_drift_check(
+        X_train,
+        X_test,
+        COLUMNAS_CARACTERISTICAS_P2,
+        ["estacion_id"],
+        "p2_feature_drift",
+    )
 
     # 1. Baseline: DummyClassifier
     if stage in ["all", "baseline"]:

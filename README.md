@@ -58,6 +58,36 @@ El manifiesto registra la URL, tamaño, número de filas y hash SHA-256 de cada 
 f4ac5ce85e317d512068af3b3707df52f0f6af303bc8ec9ad40180c3301ab5bc
 ```
 
+### Validación de calidad e integridad con DeepChecks
+
+Durante la ingesta, cada CSV de viajes se analiza después de normalizar sus
+columnas y antes de eliminar duplicados o guardar Parquet. DeepChecks evalúa
+valores faltantes en todas las columnas, filas duplicadas y tipos mixtos. La
+nomenclatura de estaciones también se revisa por valores faltantes, IDs
+duplicados y tipos mixtos; IDs repetidos, coordenadas fuera del área de
+servicio, capacidad negativa o faltantes en campos requeridos detienen el
+proceso. Una capacidad igual a cero genera una advertencia.
+
+Los faltantes en campos críticos bloquean la ingesta y generan un reporte antes
+de fallar. Los duplicados exactos y viajes con duración no positiva o superior
+a 24 horas se contabilizan en el reporte y se eliminan antes de guardar el
+Parquet. Los tipos mixtos quedan documentados para revisión. En entrenamiento,
+DeepChecks compara las características de entrenamiento y prueba de P1 y P2
+para advertir cambios de distribución; analiza como máximo 100,000 filas por
+partición, de forma reproducible. El drift es una advertencia y no detiene el
+entrenamiento.
+
+Los reportes JSON resumidos se escriben en `reports/data_quality/` con
+conteos, resultados, estado y acciones tomadas; no contienen filas del dataset
+ni valores personales. Los reportes de ingesta usan el nombre del archivo
+fuente; los de drift son `p1_feature_drift.json` y `p2_feature_drift.json`.
+La ingesta y las pruebas de calidad se ejecutan con:
+
+```powershell
+python -m mibici_mlops.dataset
+python -m pytest -m data_quality -v
+```
+
 ### Resultado de la ingesta
 
 | Elemento | Resultado |
@@ -287,7 +317,7 @@ mlflow run . -e verify_registry --env-manager local --experiment-name mibici-equ
 ### 5.5 Ejecución de pruebas unitarias (opcional)
 
 ```powershell
-python -m pytest tests/test_features_p2.py tests/test_train_p2.py -v
+python -m pytest tests/ -v
 ```
 
 ## 6. Experimentación avanzada y Tracking estructurado
@@ -582,4 +612,3 @@ Durante el desarrollo del proyecto se utilizaron ChatGPT (OpenAI) y Gemini (Goog
 ## Licencia
 
 El código del repositorio se publica bajo la licencia indicada en [`LICENSE`](LICENSE). Los datos pertenecen a sus fuentes originales y están sujetos a sus términos de uso.
-
