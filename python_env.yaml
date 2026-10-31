@@ -7,6 +7,7 @@ build_dependencies:
 dependencies:
   - beautifulsoup4==4.15.0
   - catboost==1.2.10
+  - deepchecks==0.19.1
   - ipykernel==7.3.0
   - loguru==0.7.3
   - matplotlib==3.10.9

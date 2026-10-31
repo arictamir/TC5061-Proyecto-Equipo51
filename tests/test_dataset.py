@@ -14,6 +14,16 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
+import numpy as np
+ 
+from deepchecks.tabular import Dataset
+from deepchecks.tabular.checks import (
+    DataDuplicates,
+    FeatureDrift,
+    MixedDataTypes,
+    PercentOfNulls,
+)
+
 from mibici_mlops.dataset import (
     calculate_dataset_version,
     calculate_sha256,
@@ -232,3 +242,168 @@ def test_ingestion_idempotency_and_parquet_generation(
     # Verificar que el archivo Parquet resultante es 100% idéntico
     df_leido = pd.read_parquet(parquet_out)
     pd.testing.assert_frame_equal(df1, df_leido)
+
+# ============================================================================
+# 5. VALIDACIÓN DE CALIDAD CON DEEPCHECKS
+# ============================================================================
+ 
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_valores_faltantes(
+    sample_raw_trips_df: pd.DataFrame,
+) -> None:
+    """Valida que DeepChecks detecte valores faltantes."""
+    check = (
+        PercentOfNulls()
+        .add_condition_percent_of_nulls_not_greater_than(
+            threshold=0.0,
+        )
+    )
+
+    dataset_limpio = Dataset(
+        sample_raw_trips_df,
+        cat_features=["Genero"],
+    )
+    resultado_limpio = check.run(dataset_limpio)
+
+    assert resultado_limpio.passed_conditions()
+
+    datos_con_nulo = sample_raw_trips_df.copy()
+    datos_con_nulo["Usuario_Id"] = datos_con_nulo[
+        "Usuario_Id"
+    ].astype("float64")
+    datos_con_nulo.loc[0, "Usuario_Id"] = np.nan
+
+    dataset_con_nulo = Dataset(
+        datos_con_nulo,
+        cat_features=["Genero"],
+    )
+    resultado_con_nulo = check.run(dataset_con_nulo)
+
+    assert not resultado_con_nulo.passed_conditions()
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_registros_duplicados(
+    sample_raw_trips_df: pd.DataFrame,
+) -> None:
+    """Valida que DeepChecks detecte registros duplicados."""
+    check = DataDuplicates().add_condition_ratio_less_or_equal(0)
+
+    dataset_limpio = Dataset(
+        sample_raw_trips_df,
+        cat_features=["Genero"],
+    )
+    resultado_limpio = check.run(dataset_limpio)
+
+    assert resultado_limpio.passed_conditions()
+
+    datos_duplicados = pd.concat(
+        [
+            sample_raw_trips_df,
+            sample_raw_trips_df.iloc[[0]],
+        ],
+        ignore_index=True,
+    )
+    dataset_duplicado = Dataset(
+        datos_duplicados,
+        cat_features=["Genero"],
+    )
+    resultado_duplicado = check.run(dataset_duplicado)
+
+    assert not resultado_duplicado.passed_conditions()
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_tipos_de_datos_consistentes(
+    sample_raw_trips_df: pd.DataFrame,
+) -> None:
+    """Valida que una columna no mezcle números y cadenas."""
+    check = (
+        MixedDataTypes(columns=["Ano_de_nacimiento"])
+        .add_condition_rare_type_ratio_not_in_range()
+    )
+
+    dataset_limpio = Dataset(
+        sample_raw_trips_df,
+        cat_features=["Genero"],
+    )
+    resultado_limpio = check.run(dataset_limpio)
+
+    assert resultado_limpio.passed_conditions()
+
+    datos_contaminados = pd.concat(
+        [sample_raw_trips_df] * 4,
+        ignore_index=True,
+    )
+    datos_contaminados["Ano_de_nacimiento"] = (
+        datos_contaminados["Ano_de_nacimiento"].astype(object)
+    )
+    datos_contaminados.loc[
+        0,
+        "Ano_de_nacimiento",
+    ] = "desconocido"
+
+    dataset_contaminado = Dataset(
+        datos_contaminados,
+        cat_features=["Genero"],
+    )
+    resultado_contaminado = check.run(dataset_contaminado)
+
+    assert not resultado_contaminado.passed_conditions()
+
+
+@pytest.mark.unit
+@pytest.mark.data_quality
+def test_deepchecks_drift_entre_entrenamiento_y_prueba() -> None:
+    """Valida que DeepChecks detecte drift en una variable numérica."""
+    duraciones = np.linspace(5.0, 60.0, num=60)
+
+    train_df = pd.DataFrame(
+        {
+            "duracion_minutos": duraciones,
+            "viajes_por_hora": np.tile(
+                np.arange(6, dtype="float64"),
+                10,
+            ),
+        }
+    )
+    test_sin_drift_df = train_df.copy()
+
+    test_con_drift_df = train_df.copy()
+    test_con_drift_df["duracion_minutos"] += 200.0
+
+    train_dataset = Dataset(train_df, cat_features=[])
+    test_sin_drift = Dataset(
+        test_sin_drift_df,
+        cat_features=[],
+    )
+    test_con_drift = Dataset(
+        test_con_drift_df,
+        cat_features=[],
+    )
+
+    check = FeatureDrift(
+        columns=["duracion_minutos"],
+        min_samples=10,
+        random_state=42,
+    ).add_condition_drift_score_less_than(
+        max_allowed_categorical_score=0.2,
+        max_allowed_numeric_score=0.2,
+        allowed_num_features_exceeding_threshold=0,
+    )
+
+    resultado_sin_drift = check.run(
+        train_dataset,
+        test_sin_drift,
+    )
+    resultado_con_drift = check.run(
+        train_dataset,
+        test_con_drift,
+    )
+
+    assert resultado_sin_drift.passed_conditions()
+    assert not resultado_con_drift.passed_conditions()
