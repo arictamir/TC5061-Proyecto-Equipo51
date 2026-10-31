@@ -22,6 +22,12 @@ from mibici_mlops.config import (
     START_MONTH,
     START_YEAR,
 )
+from mibici_mlops.quality import (
+    remove_invalid_trip_durations,
+    run_nomenclature_quality_checks,
+    run_trip_quality_checks,
+    save_quality_report,
+)
 
 app = typer.Typer()
 
@@ -401,8 +407,29 @@ def process_trip_files() -> list[Path]:
 
         df = read_mibici_csv(input_path)
         df = clean_trips(df)
+        quality_report = run_trip_quality_checks(df, filename)
+        df, invalid_duration_rows = remove_invalid_trip_durations(df)
+        duplicate_rows = int(quality_report["metrics"]["exact_duplicate_rows"])
         df = deduplicate_trips(df)
         validate_trips(df)
+        quality_report["metrics"]["rows_after_cleaning"] = len(df)
+        quality_report["actions"] = [
+            {
+                "issue": "exact_duplicates",
+                "detected_rows": duplicate_rows,
+                "removed_rows": duplicate_rows,
+                "action": "deduplicate_trips",
+            },
+            {
+                "issue": "invalid_trip_durations",
+                "detected_rows": invalid_duration_rows,
+                "removed_rows": invalid_duration_rows,
+                "action": "remove_invalid_trip_durations",
+            },
+        ]
+        if duplicate_rows or invalid_duration_rows:
+            quality_report["status"] = "warning"
+        save_quality_report(quality_report, filename)
 
         df.to_parquet(
             output_path,
@@ -432,6 +459,7 @@ def process_nomenclature() -> Path:
 
     df = read_mibici_csv(input_path)
     df = clean_nomenclature(df)
+    run_nomenclature_quality_checks(df, NOMENCLATURE_FILE)
     validate_nomenclature(df)
 
     df.to_parquet(

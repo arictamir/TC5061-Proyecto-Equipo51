@@ -13,6 +13,12 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+# Compatibilidad de NumPy 2.x con librerías legadas (ej. DeepChecks)
+if not hasattr(np, "Inf"):
+    np.Inf = np.inf
+if not hasattr(np, "NaN"):
+    np.NaN = np.nan
+
 from mibici_mlops.config import SEMILLA_ALEATORIA
 from mibici_mlops.features import COLUMNAS_CARACTERISTICAS_P2
 
