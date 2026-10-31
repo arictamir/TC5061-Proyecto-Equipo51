@@ -206,7 +206,7 @@ flowchart TD
 | **Tracking Server y Metadatos** | MLflow Tracking + SQLite | Backend store relacional transaccional (ACID) que centraliza parámetros, métricas, tags obligatorios y artefactos versionados, con artefactos almacenados por separado en el sistema de archivos. |
 | **Registro y Gobernanza de Modelos** | MLflow Model Registry | Centraliza versiones, firmas de tipos, ejemplos de inferencia y asignación dinámica de **Aliases** (`@champion`, `@challenger`), facilitando la consulta del historial y la carga por alias. |
 | **Serialización segura de modelos** | skops | Formato usado para guardar una copia local del candidato principal de P2; permite inspeccionar tipos antes de cargar un archivo. |
-| **Calidad de software y pruebas** | pytest y Ruff | Pruebas unitarias automatizadas de preprocesamiento y contratos de datos, con linter ultrarrápido para cumplimiento estricto de PEP 8. |
+| **Calidad de software y pruebas** | pytest y Ruff | Pruebas automatizadas de preprocesamiento y contratos de datos, con Ruff para verificar convenciones de estilo y formato. |
 | **Versionado de código y trazabilidad** | Git y GitHub | Cada ejecución en MLflow almacena como tag el commit exacto de Git (`git_commit`), vinculando la corrida con una revisión del código; los cambios sin commit deben documentarse por separado. |
 
 ## 5. Reproducir el experimento completo con MLproject y MLflow
@@ -284,10 +284,40 @@ Comprueba la disponibilidad del Model Registry, carga cada modelo con su alias `
 mlflow run . -e verify_registry --env-manager local --experiment-name mibici-equipo51
 ```
 
-### 5.5 Ejecución de pruebas unitarias (opcional)
+### 5.5 Suite de pruebas automatizadas y aseguramiento de calidad (PyTest & Ruff)
+
+El proyecto cuenta con una suite integral de 37 pruebas unitarias y de integración organizada modularmente dentro del directorio `tests/`, distribuyendo las responsabilidades de calidad entre las tres integrantes para validar contratos de datos, certificar firmas de modelos en MLflow y garantizar la ausencia estricta de fuga temporal (*data leakage*):
+
+#### Arquitectura modular de pruebas (`tests/`)
+- **`tests/conftest.py`:** Repositorio central de fixtures sintéticos reproducibles en memoria para pruebas rápidas sin dependencia de archivos Parquet pesados ni acceso a red.
+- **`tests/test_dataset.py`:** 6 pruebas de validación de esquemas canónicos de viajes y estaciones en el AMG, verificación criptográfica SHA-256 de `data_manifest.json`, tolerancia a CSVs corruptos/truncados, descarte de anomalías de duración e idempotencia del pipeline Parquet.
+- **`tests/test_features.py`:** 9 pruebas de alineación de rezagos temporales (`lag_1`, `lag_24`, `lag_168`), ventanas móviles (`rolling_mean_3h`), verificación rigurosa de *cero data leakage* por mutación temporal, estacionalidad cíclica, objetivo de presión futura a 2 horas (P2) y consistencia dimensional para clustering (P3).
+- **`tests/test_models.py`:** 6 pruebas de validación formal de firmas de MLflow (`ModelSignature`) de los tres Champions, inferencia determinista, rangos plausibles de negocio (demanda no negativa P1 $\ge 0$, suma estricta de probabilidades P2 = 1.0 en 3 clases, rango discreto de clusters P3 $\in [0, 3]$) y evaluación de robustez ante casos límite (ceros y valores extremos).
+- **`tests/test_train.py`:** 16 pruebas de integración del pipeline end-to-end (`experimento_completo`), manejo de fallos tempranos (*fail-fast*), interfaz de línea de comandos de Typer (`app`), esquema común de tags y parámetros en MLflow, y métricas asimétricas (`gmean`, `f1_macro`).
+
+#### Comandos de ejecución
 
 ```powershell
-python -m pytest tests/test_features_p2.py tests/test_train_p2.py -v
+# 1. Ejecución completa de la suite (37 pruebas en ~4 segundos)
+pytest tests/ -v
+
+# 2. Ejecución modular por archivo
+pytest tests/test_dataset.py -v   # Ingesta, esquema y manifiesto
+pytest tests/test_features.py -v  # Features, lags y no data leakage
+pytest tests/test_models.py -v    # Firmas MLflow, inferencia y contratos
+pytest tests/test_train.py -v     # Pipeline de entrenamiento y orquestación CLI
+
+# 3. Ejecución por marcadores funcionales de PyTest
+pytest -m data_quality -v         # Validación de esquemas, integridad y calidad
+pytest -m unit -v                 # Pruebas unitarias de componentes aislados
+pytest -m integration -v          # Pruebas de integración de pipeline y artefactos
+
+# 4. Reporte de cobertura de código
+pytest --cov=mibici_mlops --cov-report=term-missing tests/
+
+# 5. Chequeos de calidad, sintaxis y estilo de código (Ruff)
+ruff check tests/ mibici_mlops/
+ruff format --check tests/ mibici_mlops/
 ```
 
 ## 6. Experimentación avanzada y Tracking estructurado
@@ -476,7 +506,46 @@ Muestra los tres modelos registrados (mibici-equipo51-p1-demanda, mibici-equipo5
 
 ![Vista de Model Registry con Aliases @champion y @challenger en MLflow UI](reports/figures/evidences/week6/captura3_model_registry.png)
 
-## 10. Organización del repositorio
+## 10. Evidencias de la suite de pruebas y calidad de código (Semana 7)
+
+A continuación se presentan las capturas de evidencia ubicadas en `reports/figures/evidences/week7/` que respaldan la ejecución exitosa de la suite de pruebas, la cobertura y el análisis estático de código:
+
+### Figura 4. Ejecución exitosa de la suite completa de pruebas (PyTest)
+Muestra la ejecución limpia y determinista de los 37 tests unitarios y de integración pasando al 100 % en ~4 segundos:
+
+![Ejecución exitosa de la suite completa en PyTest](reports/figures/evidences/week7/Ejecucion_completa.png)
+
+### Figura 5. Ejecución modular por archivo
+Muestra la ejecución independiente de `test_dataset.py`, `test_features.py`, `test_models.py` y `test_train.py`:
+
+![Ejecución modular de test_dataset.py](reports/figures/evidences/week7/Ejecucion_modular_test_dataset.png)
+
+![Ejecución modular de test_features.py](reports/figures/evidences/week7/Ejecucion_modular_test_features.png)
+
+![Ejecución modular de test_models.py](reports/figures/evidences/week7/Ejecucion_modular_test_models.png)
+
+![Ejecución modular de test_train.py](reports/figures/evidences/week7/Ejecucion_modular_test_train.png)
+
+### Figura 6. Ejecución por marcadores funcionales
+Muestra el filtrado de las pruebas mediante los marcadores `@pytest.mark.data_quality`, `@pytest.mark.unit` y `@pytest.mark.integration`:
+
+![Ejecución del marcador data_quality](reports/figures/evidences/week7/Ejecucion_marcadores_data_quality.png)
+
+![Ejecución del marcador unit](reports/figures/evidences/week7/Ejecucion_marcadores_unit.png)
+
+![Ejecución del marcador integration](reports/figures/evidences/week7/Ejecucion_marcadores_integration.png)
+
+### Figura 7. Reporte de cobertura de código
+Muestra el porcentaje de cobertura y las líneas no ejecutadas de `mibici_mlops`:
+
+![Reporte de cobertura de código](reports/figures/evidences/week7/Ejecucion_cobertura.png)
+
+### Figura 8. Validación de análisis estático, linter y formateo (Ruff)
+El proyecto adopta un límite de 99 caracteres por línea, permitido por PEP 8 para proyectos mantenidos por equipos que acuerdan esta convención. Ruff verifica las reglas de estilo y formato configuradas:
+
+![Validación de calidad y estilo con Ruff](reports/figures/evidences/week7/Ejecucion_ruff.png)
+
+## 11. Organización del repositorio
 
 ```text
 TC5061-Proyecto-Equipo51/
@@ -512,14 +581,20 @@ TC5061-Proyecto-Equipo51/
 ├── reports/
 │   └── figures/
 │       ├── p2/                           # Matrices de confusión generadas por P2
-│       ├── evidences/week6/               # Capturas de MLflow
+│       ├── evidences/
+│       │   ├── week5/                    # Evidencias de seguimiento base
+│       │   ├── week6/                    # Capturas de MLflow UI, Nested Runs y Model Registry
+│       │   └── week7/                    # Capturas de ejecución de PyTest, marcadores y Ruff
 │       ├── p1_champion/ y p1_challenger/   # Diagnósticos de P1
 │       ├── p2_champion/ y p2_challenger/   # Diagnósticos de P2
 │       ├── p3_champion/ y p3_challenger/   # Mapas y perfiles de P3
 │       └── p3_clusters_spatial.png       # Mapa local generado por P3
 ├── tests/
-│   ├── test_features_p2.py
-│   └── test_train_p2.py
+│   ├── conftest.py                       # Fixtures sintéticos compartidos en memoria
+│   ├── test_dataset.py                   # Ingesta, esquema AMG, hash SHA-256 e idempotencia
+│   ├── test_features.py                  # Rezagos, rolling, no data leakage y clustering P3
+│   ├── test_models.py                    # Firmas MLflow, inferencia determinista y edge cases
+│   └── test_train.py                     # Pipeline: Entrenamiento, CLI Typer, tags y métricas
 ├── data_manifest.json                    # Versión exacta de las fuentes
 ├── Makefile
 ├── pyproject.toml
@@ -529,7 +604,7 @@ TC5061-Proyecto-Equipo51/
 
 Las carpetas internas mostradas para datos y modelos se completan después de ejecutar el flujo. Los datos y modelos generados, junto con `mlruns/`, `mlartifacts/` y `mlflow.db`, se excluyen mediante `.gitignore`. Las figuras y capturas de `reports/figures/` sí se conservan en Git. El repositorio conserva código, configuración, pruebas, documentación y metadatos reproducibles.
 
-## 11. Limitaciones y trabajo futuro
+## 12. Limitaciones y trabajo futuro
 
 - Los modelos no incorporan clima, eventos, cierres viales ni festivos externos.
 
@@ -543,7 +618,7 @@ Las carpetas internas mostradas para datos y modelos se completan después de ej
 
 - Un uso operativo necesitaría automatización, monitoreo de calidad y una interfaz para consumir predicciones y segmentos.
 
-## 12. Referencias
+## 13. Referencias
 
 - Apache Software Foundation. (s. f.). *Reading and writing the Apache Parquet format*. Apache Arrow. Recuperado el 17 de octubre de 2026, de [https://arrow.apache.org/docs/python/parquet/index.html](https://arrow.apache.org/docs/python/parquet/index.html)
 
