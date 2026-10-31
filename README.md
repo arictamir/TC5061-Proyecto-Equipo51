@@ -560,7 +560,8 @@ Muestra la ejecución limpia y determinista de los 47 tests unitarios, de integr
 ### Figura 5. Ejecución selectiva por archivo y marcadores funcionales
 Muestra la ejecución modular (`test_dataset.py`, `test_features.py`, `test_models.py`, `test_train.py`) y el filtrado por marcadores (`@pytest.mark.data_quality`, `@pytest.mark.unit`, `@pytest.mark.integration`):
 
-![Ejecución por integrantes y marcadores de PyTest](reports/figures/evidences/week7/captura2_pytest_markers_integrantes.png)
+![Ejecución por marcadores de PyTest](reports/figures/evidences/week7/captura2_pytest_markers.png)
+![Ejecución por archivo](reports/figures/evidences/week7/captura2_pytest_individuales.png)
 
 ### Figura 6. Validación de integridad, calidad y detección de drift con DeepChecks
 Muestra la ejecución de los chequeos de DeepChecks (`PercentOfNulls`, `DataDuplicates`, `MixedDataTypes`, `FeatureDrift`), verificando la ausencia de duplicados, tipos consistentes y ausencia de deriva no controlada:
@@ -570,7 +571,8 @@ Muestra la ejecución de los chequeos de DeepChecks (`PercentOfNulls`, `DataDupl
 ### Figura 7. Auditoría de seguridad de código y dependencias (Bandit y pip-audit)
 Muestra la auditoría estática de seguridad con Bandit (0 vulnerabilidades de severidad Media o Alta) y el análisis de dependencias con pip-audit:
 
-![Auditoría de seguridad con Bandit y pip-audit](reports/figures/evidences/week7/captura4_security_bandit_audit.png)
+![Auditoría de seguridad con Bandit](reports/figures/evidences/week7/captura4_security_bandit.png)
+![Auditoría de seguridad con pip-audit](reports/figures/evidences/week7/captura4_security_pip_audit.png)
 
 ### Figura 8. Validación de análisis estático, linter y formateo (Ruff)
 Muestra la conformidad estricta con PEP 8 y buenas prácticas de ingeniería de software con 0 errores y 0 advertencias:
