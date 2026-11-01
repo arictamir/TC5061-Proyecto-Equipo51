@@ -88,6 +88,36 @@ python -m mibici_mlops.dataset
 python -m pytest -m data_quality -v
 ```
 
+### Validación de calidad e integridad con DeepChecks
+
+Durante la ingesta, cada CSV de viajes se analiza después de normalizar sus
+columnas y antes de eliminar duplicados o guardar Parquet. DeepChecks evalúa
+valores faltantes en todas las columnas, filas duplicadas y tipos mixtos. La
+nomenclatura de estaciones también se revisa por valores faltantes, IDs
+duplicados y tipos mixtos; IDs repetidos, coordenadas fuera del área de
+servicio, capacidad negativa o faltantes en campos requeridos detienen el
+proceso. Una capacidad igual a cero genera una advertencia.
+
+Los faltantes en campos críticos bloquean la ingesta y generan un reporte antes
+de fallar. Los duplicados exactos y viajes con duración no positiva o superior
+a 24 horas se contabilizan en el reporte y se eliminan antes de guardar el
+Parquet. Los tipos mixtos quedan documentados para revisión. En entrenamiento,
+DeepChecks compara las características de entrenamiento y prueba de P1 y P2
+para advertir cambios de distribución; analiza como máximo 100,000 filas por
+partición, de forma reproducible. El drift es una advertencia y no detiene el
+entrenamiento.
+
+Los reportes JSON resumidos se escriben en `reports/data_quality/` con
+conteos, resultados, estado y acciones tomadas; no contienen filas del dataset
+ni valores personales. Los reportes de ingesta usan el nombre del archivo
+fuente; los de drift son `p1_feature_drift.json` y `p2_feature_drift.json`.
+La ingesta y las pruebas de calidad se ejecutan con:
+
+```powershell
+python -m mibici_mlops.dataset
+python -m pytest -m data_quality -v
+```
+
 ### Resultado de la ingesta
 
 | Elemento | Resultado |
@@ -315,14 +345,24 @@ mlflow run . -e verify_registry --env-manager local --experiment-name mibici-equ
 ```
 
 ### 5.5 Suite de pruebas automatizadas y aseguramiento de calidad (PyTest, DeepChecks, Seguridad & Ruff)
+### 5.5 Suite de pruebas automatizadas y aseguramiento de calidad (PyTest, DeepChecks, Seguridad & Ruff)
 
+El proyecto cuenta con una suite integral de 47 pruebas unitarias, de integración y de calidad de datos organizada modularmente dentro del directorio `tests/`, distribuyendo las responsabilidades de calidad entre las integrantes del equipo para validar contratos de datos, certificar firmas de modelos en MLflow, garantizar la ausencia estricta de fuga temporal (*data leakage*), verificar la integridad y drift de datos con DeepChecks, y comprobar la reproducibilidad exacta del entrenamiento:
 El proyecto cuenta con una suite integral de 47 pruebas unitarias, de integración y de calidad de datos organizada modularmente dentro del directorio `tests/`, distribuyendo las responsabilidades de calidad entre las integrantes del equipo para validar contratos de datos, certificar firmas de modelos en MLflow, garantizar la ausencia estricta de fuga temporal (*data leakage*), verificar la integridad y drift de datos con DeepChecks, y comprobar la reproducibilidad exacta del entrenamiento:
 
 #### Arquitectura modular de pruebas (`tests/`)
 - **`tests/conftest.py`:** Repositorio central de fixtures sintéticos reproducibles en memoria para pruebas rápidas sin dependencia de archivos pesados ni acceso a red, con compatibilidad de NumPy 2.x para librerías legadas.
 - **`tests/test_dataset.py`:** 14 pruebas que cubren validación de esquemas canónicos de viajes y estaciones en el AMG, verificación criptográfica SHA-256 de `data_manifest.json`, tolerancia a CSVs corruptos/truncados, descarte de anomalías de duración, e integración de chequeos de calidad de **DeepChecks** (`PercentOfNulls`, `DataDuplicates`, `MixedDataTypes`, `FeatureDrift`).
+- **`tests/conftest.py`:** Repositorio central de fixtures sintéticos reproducibles en memoria para pruebas rápidas sin dependencia de archivos pesados ni acceso a red, con compatibilidad de NumPy 2.x para librerías legadas.
+- **`tests/test_dataset.py`:** 14 pruebas que cubren validación de esquemas canónicos de viajes y estaciones en el AMG, verificación criptográfica SHA-256 de `data_manifest.json`, tolerancia a CSVs corruptos/truncados, descarte de anomalías de duración, e integración de chequeos de calidad de **DeepChecks** (`PercentOfNulls`, `DataDuplicates`, `MixedDataTypes`, `FeatureDrift`).
 - **`tests/test_features.py`:** 9 pruebas de alineación de rezagos temporales (`lag_1`, `lag_24`, `lag_168`), ventanas móviles (`rolling_mean_3h`), verificación rigurosa de *cero data leakage* por mutación temporal, estacionalidad cíclica, objetivo de presión futura a 2 horas (P2) y consistencia dimensional para clustering (P3).
 - **`tests/test_models.py`:** 6 pruebas de validación formal de firmas de MLflow (`ModelSignature`) de los tres Champions, inferencia determinista, rangos plausibles de negocio (demanda no negativa P1 $\ge 0$, suma estricta de probabilidades P2 = 1.0 en 3 clases, rango discreto de clusters P3 $\in [0, 3]$) y evaluación de robustez ante casos límite (ceros y valores extremos).
+- **`tests/test_train.py`:** 18 pruebas de integración del pipeline end-to-end (`experimento_completo`), manejo de fallos tempranos (*fail-fast*), interfaz de línea de comandos de Typer (`app`), esquema común de tags y parámetros en MLflow, métricas asimétricas (`gmean`, `f1_macro`), monitoreo de drift en variables de entrada y **prueba explícita de reproducibilidad del entrenamiento** (verificando que dos ejecuciones independientes con la misma semilla produzcan idénticas predicciones y métricas).
+
+#### Chequeos de seguridad básicos y buenas prácticas de gobernanza
+- **Protección contra fuga de credenciales:** El archivo `.gitignore` excluye estrictamente archivos de entorno (`.env*`, `.venv`), credenciales locales, bases de datos SQLite transaccionales (`mlflow.db*`), almacén de artefactos (`mlruns/`, `mlartifacts/`), modelos serializados (`*.cbm`, `*.pkl`, `*.skops`, `*.parquet`) y datos crudos/procesados (`/data/**/*`). Las configuraciones sensibles se leen exclusivamente a través de variables de entorno con valores por defecto seguros.
+- **Auditoría de seguridad estática de código (Bandit):** Análisis automatizado de vulnerabilidades en todo el código fuente de `mibici_mlops/` (0 vulnerabilidades de severidad Media o Alta).
+- **Auditoría de vulnerabilidades de dependencias (pip-audit):** Escaneo de la lista de dependencias (`requirements.txt`) contra la base de datos oficial de vulnerabilidades (PyPI / OSV).
 - **`tests/test_train.py`:** 18 pruebas de integración del pipeline end-to-end (`experimento_completo`), manejo de fallos tempranos (*fail-fast*), interfaz de línea de comandos de Typer (`app`), esquema común de tags y parámetros en MLflow, métricas asimétricas (`gmean`, `f1_macro`), monitoreo de drift en variables de entrada y **prueba explícita de reproducibilidad del entrenamiento** (verificando que dos ejecuciones independientes con la misma semilla produzcan idénticas predicciones y métricas).
 
 #### Chequeos de seguridad básicos y buenas prácticas de gobernanza
@@ -334,9 +374,14 @@ El proyecto cuenta con una suite integral de 47 pruebas unitarias, de integraci�
 
 ```powershell
 # 1. Ejecución completa de la suite (47 pruebas en ~11 segundos)
+# 1. Ejecución completa de la suite (47 pruebas en ~11 segundos)
 pytest tests/ -v
 
 # 2. Ejecución modular por archivo
+pytest tests/test_dataset.py -v          # Ingesta, esquema, manifiesto y DeepChecks
+pytest tests/test_features.py -v         # Features, lags y no data leakage
+pytest tests/test_models.py -v           # Firmas MLflow, inferencia y contratos
+pytest tests/test_train.py -v            # Pipeline, reproducibilidad y orquestación CLI
 pytest tests/test_dataset.py -v          # Ingesta, esquema, manifiesto y DeepChecks
 pytest tests/test_features.py -v         # Features, lags y no data leakage
 pytest tests/test_models.py -v           # Firmas MLflow, inferencia y contratos
@@ -346,10 +391,21 @@ pytest tests/test_train.py -v            # Pipeline, reproducibilidad y orquesta
 pytest -m data_quality -v                # Validación de esquemas, integridad y calidad
 pytest -m unit -v                        # Pruebas unitarias de componentes aislados
 pytest -m integration -v                 # Pruebas de integración de pipeline y artefactos
+pytest -m data_quality -v                # Validación de esquemas, integridad y calidad
+pytest -m unit -v                        # Pruebas unitarias de componentes aislados
+pytest -m integration -v                 # Pruebas de integración de pipeline y artefactos
 
 # 4. Reporte de cobertura de código
 pytest --cov=mibici_mlops --cov-report=term-missing tests/
 
+# 5. Chequeos de seguridad estática de código (Bandit)
+bandit -r mibici_mlops/ -ll              # Análisis de vulnerabilidades de severidad media y alta
+bandit -r mibici_mlops/ -f txt           # Reporte detallado de seguridad
+
+# 6. Auditoría de seguridad en dependencias (pip-audit)
+pip-audit -r requirements.txt
+
+# 7. Chequeos de calidad, sintaxis y estilo de código (Ruff)
 # 5. Chequeos de seguridad estática de código (Bandit)
 bandit -r mibici_mlops/ -ll              # Análisis de vulnerabilidades de severidad media y alta
 bandit -r mibici_mlops/ -f txt           # Reporte detallado de seguridad
@@ -551,12 +607,20 @@ Muestra los tres modelos registrados (mibici-equipo51-p1-demanda, mibici-equipo5
 ## 10. Evidencias de la suite de pruebas y calidad de código (Semana 7)
 
 A continuación se presentan las capturas de evidencia ubicadas en `reports/figures/evidences/week7/` que respaldan la ejecución exitosa de la suite de pruebas, la validación de datos con DeepChecks, la auditoría de seguridad y el análisis estático de código:
+A continuación se presentan las capturas de evidencia ubicadas en `reports/figures/evidences/week7/` que respaldan la ejecución exitosa de la suite de pruebas, la validación de datos con DeepChecks, la auditoría de seguridad y el análisis estático de código:
 
 ### Figura 4. Ejecución exitosa de la suite completa de pruebas (PyTest)
 Muestra la ejecución limpia y determinista de los 47 tests unitarios, de integración y de calidad de datos pasando al 100 % en ~11 segundos:
+Muestra la ejecución limpia y determinista de los 47 tests unitarios, de integración y de calidad de datos pasando al 100 % en ~11 segundos:
 
 ![Ejecución exitosa de la suite completa en PyTest](reports/figures/evidences/week7/captura1_pytest_suite_completa.png)
+![Ejecución exitosa de la suite completa en PyTest](reports/figures/evidences/week7/captura1_pytest_suite_completa.png)
 
+### Figura 5. Ejecución selectiva por archivo y marcadores funcionales
+Muestra la ejecución modular (`test_dataset.py`, `test_features.py`, `test_models.py`, `test_train.py`) y el filtrado por marcadores (`@pytest.mark.data_quality`, `@pytest.mark.unit`, `@pytest.mark.integration`):
+
+![Ejecución por marcadores de PyTest](reports/figures/evidences/week7/captura2_pytest_markers.png)
+![Ejecución por archivo](reports/figures/evidences/week7/captura2_pytest_individuales.png)
 ### Figura 5. Ejecución selectiva por archivo y marcadores funcionales
 Muestra la ejecución modular (`test_dataset.py`, `test_features.py`, `test_models.py`, `test_train.py`) y el filtrado por marcadores (`@pytest.mark.data_quality`, `@pytest.mark.unit`, `@pytest.mark.integration`):
 
@@ -570,13 +634,19 @@ Muestra la ejecución de los chequeos de DeepChecks (`PercentOfNulls`, `DataDupl
 
 ### Figura 7. Auditoría de seguridad de código y dependencias (Bandit y pip-audit)
 Muestra la auditoría estática de seguridad con Bandit (0 vulnerabilidades de severidad Media o Alta) y el análisis de dependencias con pip-audit:
+### Figura 7. Auditoría de seguridad de código y dependencias (Bandit y pip-audit)
+Muestra la auditoría estática de seguridad con Bandit (0 vulnerabilidades de severidad Media o Alta) y el análisis de dependencias con pip-audit:
 
+![Auditoría de seguridad con Bandit](reports/figures/evidences/week7/captura4_security_bandit.png)
+![Auditoría de seguridad con pip-audit](reports/figures/evidences/week7/captura4_security_pip_audit.png)
 ![Auditoría de seguridad con Bandit](reports/figures/evidences/week7/captura4_security_bandit.png)
 ![Auditoría de seguridad con pip-audit](reports/figures/evidences/week7/captura4_security_pip_audit.png)
 
 ### Figura 8. Validación de análisis estático, linter y formateo (Ruff)
 Muestra la conformidad estricta con PEP 8 y buenas prácticas de ingeniería de software con 0 errores y 0 advertencias:
+Muestra la conformidad estricta con PEP 8 y buenas prácticas de ingeniería de software con 0 errores y 0 advertencias:
 
+![Validación de calidad y estilo con Ruff](reports/figures/evidences/week7/captura5_ruff_linter_checks.png)
 ![Validación de calidad y estilo con Ruff](reports/figures/evidences/week7/captura5_ruff_linter_checks.png)
 
 ## 11. Organización del repositorio
@@ -606,6 +676,8 @@ TC5061-Proyecto-Equipo51/
 │   ├── features.py                       # Características de las tres preguntas
 │   ├── plots.py                          # Utilidades gráficas
 │   └── quality.py                        # Validación de integridad y reportes con DeepChecks
+│   ├── plots.py                          # Utilidades gráficas
+│   └── quality.py                        # Validación de integridad y reportes con DeepChecks
 ├── models/
 │   └── p2/modelo_p2.skops                 # Modelo local generado; ignorado por Git
 ├── notebooks/
@@ -615,11 +687,13 @@ TC5061-Proyecto-Equipo51/
 ├── references/                           # ML Canvas y arquitectura versionados
 ├── reports/
 │   ├── data_quality/                     # Reportes JSON de auditoría DeepChecks
+│   ├── data_quality/                     # Reportes JSON de auditoría DeepChecks
 │   └── figures/
 │       ├── p2/                           # Matrices de confusión generadas por P2
 │       ├── evidences/
 │       │   ├── week5/                    # Evidencias de seguimiento base
 │       │   ├── week6/                    # Capturas de MLflow UI, Nested Runs y Model Registry
+│       │   └── week7/                    # Capturas de ejecución de PyTest, DeepChecks, Bandit y Ruff
 │       │   └── week7/                    # Capturas de ejecución de PyTest, DeepChecks, Bandit y Ruff
 │       ├── p1_champion/ y p1_challenger/   # Diagnósticos de P1
 │       ├── p2_champion/ y p2_challenger/   # Diagnósticos de P2
@@ -628,8 +702,10 @@ TC5061-Proyecto-Equipo51/
 ├── tests/
 │   ├── conftest.py                       # Fixtures sintéticos compartidos en memoria
 │   ├── test_dataset.py                   # Ingesta, esquema, hash SHA-256 y DeepChecks
+│   ├── test_dataset.py                   # Ingesta, esquema, hash SHA-256 y DeepChecks
 │   ├── test_features.py                  # Rezagos, rolling, no data leakage y clustering P3
 │   ├── test_models.py                    # Firmas MLflow, inferencia determinista y edge cases
+│   └── test_train.py                     # Pipeline: Reproducibilidad, drift, tags y métricas
 │   └── test_train.py                     # Pipeline: Reproducibilidad, drift, tags y métricas
 ├── data_manifest.json                    # Versión exacta de las fuentes
 ├── Makefile
