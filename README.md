@@ -566,7 +566,7 @@ Muestra la ejecución modular (`test_dataset.py`, `test_features.py`, `test_mode
 ### Figura 6. Validación de integridad, calidad y detección de drift con DeepChecks
 Muestra la ejecución de los chequeos de DeepChecks (`PercentOfNulls`, `DataDuplicates`, `MixedDataTypes`, `FeatureDrift`), verificando la ausencia de duplicados, tipos consistentes y ausencia de deriva no controlada:
 
-![Validación de integridad y drift con DeepChecks](reports/figures/evidences/week7/captura3_deepchecks_validation.png)
+![Validación de integridad y drift con DeepChecks](reports/figures/evidences/week7/Ejecucion_marcadores_data_quality.png)
 
 ### Figura 7. Auditoría de seguridad de código y dependencias (Bandit y pip-audit)
 Muestra la auditoría estática de seguridad con Bandit (0 vulnerabilidades de severidad Media o Alta) y el análisis de dependencias con pip-audit:
