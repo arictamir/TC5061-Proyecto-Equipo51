@@ -22,4 +22,5 @@ setuptools<70
 skops==0.16.0
 tqdm==4.70.1
 typer==0.27.3
+# TODO - Ingrid - Agregar dependencias de la API REST (fastapi, uvicorn, pydantic)
 -e .

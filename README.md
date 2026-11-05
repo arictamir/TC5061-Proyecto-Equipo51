@@ -634,20 +634,22 @@ Muestra la ejecución de los chequeos de DeepChecks (`PercentOfNulls`, `DataDupl
 
 ### Figura 7. Auditoría de seguridad de código y dependencias (Bandit y pip-audit)
 Muestra la auditoría estática de seguridad con Bandit (0 vulnerabilidades de severidad Media o Alta) y el análisis de dependencias con pip-audit:
-### Figura 7. Auditoría de seguridad de código y dependencias (Bandit y pip-audit)
-Muestra la auditoría estática de seguridad con Bandit (0 vulnerabilidades de severidad Media o Alta) y el análisis de dependencias con pip-audit:
 
-![Auditoría de seguridad con Bandit](reports/figures/evidences/week7/captura4_security_bandit.png)
-![Auditoría de seguridad con pip-audit](reports/figures/evidences/week7/captura4_security_pip_audit.png)
 ![Auditoría de seguridad con Bandit](reports/figures/evidences/week7/captura4_security_bandit.png)
 ![Auditoría de seguridad con pip-audit](reports/figures/evidences/week7/captura4_security_pip_audit.png)
 
 ### Figura 8. Validación de análisis estático, linter y formateo (Ruff)
 Muestra la conformidad estricta con PEP 8 y buenas prácticas de ingeniería de software con 0 errores y 0 advertencias:
-Muestra la conformidad estricta con PEP 8 y buenas prácticas de ingeniería de software con 0 errores y 0 advertencias:
 
 ![Validación de calidad y estilo con Ruff](reports/figures/evidences/week7/captura5_ruff_linter_checks.png)
-![Validación de calidad y estilo con Ruff](reports/figures/evidences/week7/captura5_ruff_linter_checks.png)
+
+<!-- TODO - Ingrid - Sección 11: Despliegue de Inferencia con FastAPI y Contenedor OCI (Docker / Podman)
+- Instrucciones para construir la imagen: `podman build -t mibici-api:latest .` o `docker build -t mibici-api:latest .`
+- Instrucciones para levantar el contenedor: `podman run -d -p 8000:8000 -e MLFLOW_TRACKING_URI=http://host.containers.internal:5000 --name mibici-service mibici-api:latest`
+- Ejemplo de petición (curl o python) al endpoint `/predict` y respuesta JSON obtenida.
+- Justificación técnica de la estrategia de despliegue elegida (ej. inferencia en tiempo real para balanceo de flota).
+- Placeholder de evidencia de ejecución exitosa desde el contenedor.
+-->
 
 ## 11. Organización del repositorio
 

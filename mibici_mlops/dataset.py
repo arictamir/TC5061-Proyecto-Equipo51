@@ -106,6 +106,11 @@ def select_required_files(csv_urls: dict[str, str]) -> dict[str, str]:
         END_MONTH,
     )
 
+    # TODO - Ari - Resolver de forma dinámica la nomenclatura en el portal:
+    # 1. Si NOMENCLATURE_FILE existe en csv_urls, usarlo directamente.
+    # 2. Si no, buscar la nomenclatura más reciente disponible en el portal (ej. nomenclatura_2026_10.csv).
+    # 3. Si no hay conexión o no está en el portal pero existe localmente en RAW_DATA_DIR / NOMENCLATURE_FILE, usar la copia local.
+    # Esto soluciona la retroalimentación: "ValueError: Required files not found in MiBici portal".
     required_files.append(NOMENCLATURE_FILE)
 
     missing_files = [filename for filename in required_files if filename not in csv_urls]

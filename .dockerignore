@@ -1,0 +1,35 @@
+# ==============================================================================
+# .dockerignore - Optimización de contexto de construcción OCI (Podman / Docker)
+# TODO Ingrid - validar
+# ==============================================================================
+
+# Entornos virtuales locales
+.venv/
+venv/
+env/
+
+# Caché de Python y pytest
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+
+# Git y metadatos locales
+.git/
+.gitignore
+
+# Datos pesados crudos y procesados (no empaquetar dentro de la imagen de inferencia)
+data/raw/
+data/processed/trips/
+
+# Documentación y reportes de desarrollo
+docs/
+reports/
+
+# MLflow local run tracking de desarrollo
+mlruns/
+mlartifacts/
+mlflow.db*
+catboost_info/
+
