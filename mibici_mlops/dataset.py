@@ -99,30 +99,51 @@ def build_trip_filenames(
 
 def select_required_files(csv_urls: dict[str, str]) -> dict[str, str]:
     """Select and validate the files required for the project."""
-    required_files = build_trip_filenames(
+    required_trip_files = build_trip_filenames(
         START_YEAR,
         START_MONTH,
         END_YEAR,
         END_MONTH,
     )
 
-    # TODO - Ari - Resolver de forma dinámica la nomenclatura en el portal:
-    # 1. Si NOMENCLATURE_FILE existe en csv_urls, usarlo directamente.
-    # 2. Si no, buscar la nomenclatura más reciente disponible en el portal (ej. nomenclatura_2026_10.csv).
-    # 3. Si no hay conexión o no está en el portal pero existe localmente en RAW_DATA_DIR / NOMENCLATURE_FILE, usar la copia local.
-    # Esto soluciona la retroalimentación: "ValueError: Required files not found in MiBici portal".
-    required_files.append(NOMENCLATURE_FILE)
+    missing_trip_files = [filename for filename in required_trip_files if filename not in csv_urls]
 
-    missing_files = [filename for filename in required_files if filename not in csv_urls]
+    if missing_trip_files:
+        raise ValueError(f"Required trip files not found in MiBici portal: {missing_trip_files}")
 
-    if missing_files:
-        raise ValueError(f"Required files not found in MiBici portal: {missing_files}")
+    selected_urls = {filename: csv_urls[filename] for filename in required_trip_files}
 
-    selected_urls = {filename: csv_urls[filename] for filename in required_files}
+    # Resolución de la nomenclatura de estaciones  contemplando cambios futuros en el nombre del archivo de configuración:
+    # 1. Si el archivo exacto de configuración está disponible en el portal, seleccionarlo.
+    # 2. Si el portal actualizó el mes, seleccionar la versión más reciente disponible.
+    # 3. Si no hay conexión o no está en el portal pero ya existe localmente, reutilizar la copia local.
+    if NOMENCLATURE_FILE in csv_urls:
+        selected_urls[NOMENCLATURE_FILE] = csv_urls[NOMENCLATURE_FILE]
+    else:
+        portal_nomenclatures = sorted(
+            [f for f in csv_urls if re.match(r"^nomenclatura_.*\.csv$", f, re.IGNORECASE)],
+            reverse=True,
+        )
+        if portal_nomenclatures:
+            latest_nom = portal_nomenclatures[0]
+            logger.info(
+                f"Nomenclatura configurada '{NOMENCLATURE_FILE}' no encontrada en el portal; "
+                f"utilizando la versión más reciente disponible: '{latest_nom}'"
+            )
+            selected_urls[latest_nom] = csv_urls[latest_nom]
+        elif (RAW_DATA_DIR / NOMENCLATURE_FILE).exists():
+            logger.warning(
+                f"Nomenclatura no encontrada en el portal, reutilizando copia local: "
+                f"{RAW_DATA_DIR / NOMENCLATURE_FILE}"
+            )
+        else:
+            raise ValueError(
+                f"Required files not found in MiBici portal: [{NOMENCLATURE_FILE}]"
+            )
 
     logger.success(
         f"Validated {len(selected_urls)} required files "
-        f"({len(required_files) - 1} trip files + nomenclature)."
+        f"({len(required_trip_files)} trip files + nomenclature)."
     )
 
     return selected_urls
@@ -187,12 +208,24 @@ def download_required_files(
     selected_urls: dict[str, str],
 ) -> list[Path]:
     """Download all required MiBici files to the raw data directory."""
+    import shutil
+
     downloaded_files = []
 
     for filename, url in selected_urls.items():
         destination = RAW_DATA_DIR / filename
         file_path = download_file(url, destination)
         downloaded_files.append(file_path)
+
+    # Sincronización defensiva: Si se descargó una versión más reciente de nomenclatura
+    # (ej. nomenclatura_2026_10.csv), asegurar que NOMENCLATURE_FILE exista para procesos posteriores
+    if not (RAW_DATA_DIR / NOMENCLATURE_FILE).exists():
+        downloaded_noms = sorted(RAW_DATA_DIR.glob("nomenclatura_*.csv"), reverse=True)
+        if downloaded_noms:
+            shutil.copy2(downloaded_noms[0], RAW_DATA_DIR / NOMENCLATURE_FILE)
+            logger.info(
+                f"Sincronizada copia de {downloaded_noms[0].name} como {NOMENCLATURE_FILE}"
+            )
 
     logger.success(f"Download step completed for {len(downloaded_files)} required files.")
 
