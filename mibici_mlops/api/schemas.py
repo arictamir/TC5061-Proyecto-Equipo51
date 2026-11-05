@@ -1,6 +1,5 @@
 """Esquemas de validación de datos con Pydantic para la API de inferencia.
 
-Responsable: Ariadna (Ari)
 Define contratos de entrada y salida con tipado estricto, validación de rangos
 y ejemplos interactivos para OpenAPI / Swagger UI.
 """

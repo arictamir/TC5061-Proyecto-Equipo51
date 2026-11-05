@@ -1,8 +1,4 @@
 """Aplicación principal de FastAPI para el servicio de inferencia de MiBici.
-
-Responsables conjuntos: Ariadna (Ari) y Gabriela (Gaby)
-- Ariadna: Estructura de la aplicación, metadatos OpenAPI y endpoints de salud / raíz.
-- Gabriela: Inyección del servicio de modelos e integración de endpoints de inferencia.
 """
 
 from collections.abc import AsyncGenerator
