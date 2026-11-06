@@ -35,6 +35,12 @@ minversion = "7.0"
 addopts = "-ra -q"
 testpaths = ["tests"]
 pythonpath = ["."]
+filterwarnings = [
+    "ignore::DeprecationWarning:deepchecks.*:",
+    "ignore:pkg_resources is deprecated as an API:DeprecationWarning",
+    "ignore:.*starlette.testclient.*",
+    "ignore:.*httpx.*",
+]
 markers = [
     "unit: pruebas unitarias aisladas de funciones y componentes",
     "integration: pruebas de integracion entre modulos y artefactos",

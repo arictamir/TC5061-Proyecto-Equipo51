@@ -1,6 +1,5 @@
 """Pruebas unitarias y de integración para Ingesta, Manifiesto y Calidad de Datos.
 
-Módulo asignado a: Ariadna del Carmen Tapia Miranda (Integrante 1)
 Cubre:
 - Validación de esquemas y tipos de viajes y nomenclatura.
 - Integridad y reproducibilidad del manifiesto con hash SHA-256.
