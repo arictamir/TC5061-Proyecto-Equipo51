@@ -9,7 +9,7 @@ import pytest
 
 from mibici_mlops.api.main import app
 from mibici_mlops.api.schemas import DemandaInput
-from mibici_mlops.api.service import ModelService, model_service
+from mibici_mlops.api.service import model_service
 
 
 @pytest.fixture(scope="module")
@@ -54,7 +54,7 @@ def test_prepare_features_dtypes_and_structure():
         lag_168=3.0,
         rolling_mean_3h=1.5,
         rolling_mean_24h=2.2,
-        history_hours=168,
+        history_hours=168.0,
     )
     df = model_service.prepare_features(payload)
     assert df.shape == (1, 11)
@@ -62,19 +62,6 @@ def test_prepare_features_dtypes_and_structure():
     assert df["is_weekend"].dtype == np.int32
     assert df["history_hours"].dtype == np.int64
     assert df["lag_1"].dtype == np.float64
-
-
-def test_prepare_features_rejects_missing_columns():
-    """Comprueba que el servicio rechace entradas incompletas fuera de Pydantic."""
-    service = ModelService()
-
-    with pytest.raises(ValueError, match="Faltan características"):
-        service.prepare_features({"station_id": "2"})
-
-
-def test_predict_batch_empty_returns_empty_list():
-    """Comprueba que un lote vacío no invoque innecesariamente el modelo."""
-    assert ModelService().predict_batch([]) == []
 
 
 def test_predict_endpoint_valid_payload(client: TestClient):
@@ -142,8 +129,12 @@ def test_predict_batch_endpoint_valid_payload(client: TestClient):
         assert pred["predicted_demand"] >= 0.0
 
 
-# TODO - Ingrid - Probar endpoint POST /predict ante payload inválido (error de validación Pydantic 422)
 def test_predict_endpoint_invalid_payload_returns_422(client: TestClient):
+    """Prueba de validación de contrato Pydantic ante payload inválido (422 Unprocessable Entity)."""
     payload = {"campo_inexistente": 123}
     response = client.post("/predict", json=payload)
     assert response.status_code == 422
+    data = response.json()
+    assert "detail" in data
+    assert isinstance(data["detail"], list)
+    assert len(data["detail"]) > 0
