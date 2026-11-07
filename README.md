@@ -88,36 +88,6 @@ python -m mibici_mlops.dataset
 python -m pytest -m data_quality -v
 ```
 
-### Validación de calidad e integridad con DeepChecks
-
-Durante la ingesta, cada CSV de viajes se analiza después de normalizar sus
-columnas y antes de eliminar duplicados o guardar Parquet. DeepChecks evalúa
-valores faltantes en todas las columnas, filas duplicadas y tipos mixtos. La
-nomenclatura de estaciones también se revisa por valores faltantes, IDs
-duplicados y tipos mixtos; IDs repetidos, coordenadas fuera del área de
-servicio, capacidad negativa o faltantes en campos requeridos detienen el
-proceso. Una capacidad igual a cero genera una advertencia.
-
-Los faltantes en campos críticos bloquean la ingesta y generan un reporte antes
-de fallar. Los duplicados exactos y viajes con duración no positiva o superior
-a 24 horas se contabilizan en el reporte y se eliminan antes de guardar el
-Parquet. Los tipos mixtos quedan documentados para revisión. En entrenamiento,
-DeepChecks compara las características de entrenamiento y prueba de P1 y P2
-para advertir cambios de distribución; analiza como máximo 100,000 filas por
-partición, de forma reproducible. El drift es una advertencia y no detiene el
-entrenamiento.
-
-Los reportes JSON resumidos se escriben en `reports/data_quality/` con
-conteos, resultados, estado y acciones tomadas; no contienen filas del dataset
-ni valores personales. Los reportes de ingesta usan el nombre del archivo
-fuente; los de drift son `p1_feature_drift.json` y `p2_feature_drift.json`.
-La ingesta y las pruebas de calidad se ejecutan con:
-
-```powershell
-python -m mibici_mlops.dataset
-python -m pytest -m data_quality -v
-```
-
 ### Resultado de la ingesta
 
 | Elemento | Resultado |
@@ -345,14 +315,10 @@ mlflow run . -e verify_registry --env-manager local --experiment-name mibici-equ
 ```
 
 ### 5.5 Suite de pruebas automatizadas y aseguramiento de calidad (PyTest, DeepChecks, Seguridad & Ruff)
-### 5.5 Suite de pruebas automatizadas y aseguramiento de calidad (PyTest, DeepChecks, Seguridad & Ruff)
 
-El proyecto cuenta con una suite integral de 47 pruebas unitarias, de integración y de calidad de datos organizada modularmente dentro del directorio `tests/`, distribuyendo las responsabilidades de calidad entre las integrantes del equipo para validar contratos de datos, certificar firmas de modelos en MLflow, garantizar la ausencia estricta de fuga temporal (*data leakage*), verificar la integridad y drift de datos con DeepChecks, y comprobar la reproducibilidad exacta del entrenamiento:
 El proyecto cuenta con una suite integral de 47 pruebas unitarias, de integración y de calidad de datos organizada modularmente dentro del directorio `tests/`, distribuyendo las responsabilidades de calidad entre las integrantes del equipo para validar contratos de datos, certificar firmas de modelos en MLflow, garantizar la ausencia estricta de fuga temporal (*data leakage*), verificar la integridad y drift de datos con DeepChecks, y comprobar la reproducibilidad exacta del entrenamiento:
 
 #### Arquitectura modular de pruebas (`tests/`)
-- **`tests/conftest.py`:** Repositorio central de fixtures sintéticos reproducibles en memoria para pruebas rápidas sin dependencia de archivos pesados ni acceso a red, con compatibilidad de NumPy 2.x para librerías legadas.
-- **`tests/test_dataset.py`:** 14 pruebas que cubren validación de esquemas canónicos de viajes y estaciones en el AMG, verificación criptográfica SHA-256 de `data_manifest.json`, tolerancia a CSVs corruptos/truncados, descarte de anomalías de duración, e integración de chequeos de calidad de **DeepChecks** (`PercentOfNulls`, `DataDuplicates`, `MixedDataTypes`, `FeatureDrift`).
 - **`tests/conftest.py`:** Repositorio central de fixtures sintéticos reproducibles en memoria para pruebas rápidas sin dependencia de archivos pesados ni acceso a red, con compatibilidad de NumPy 2.x para librerías legadas.
 - **`tests/test_dataset.py`:** 14 pruebas que cubren validación de esquemas canónicos de viajes y estaciones en el AMG, verificación criptográfica SHA-256 de `data_manifest.json`, tolerancia a CSVs corruptos/truncados, descarte de anomalías de duración, e integración de chequeos de calidad de **DeepChecks** (`PercentOfNulls`, `DataDuplicates`, `MixedDataTypes`, `FeatureDrift`).
 - **`tests/test_features.py`:** 9 pruebas de alineación de rezagos temporales (`lag_1`, `lag_24`, `lag_168`), ventanas móviles (`rolling_mean_3h`), verificación rigurosa de *cero data leakage* por mutación temporal, estacionalidad cíclica, objetivo de presión futura a 2 horas (P2) y consistencia dimensional para clustering (P3).
@@ -363,57 +329,35 @@ El proyecto cuenta con una suite integral de 47 pruebas unitarias, de integraci�
 - **Protección contra fuga de credenciales:** El archivo `.gitignore` excluye estrictamente archivos de entorno (`.env*`, `.venv`), credenciales locales, bases de datos SQLite transaccionales (`mlflow.db*`), almacén de artefactos (`mlruns/`, `mlartifacts/`), modelos serializados (`*.cbm`, `*.pkl`, `*.skops`, `*.parquet`) y datos crudos/procesados (`/data/**/*`). Las configuraciones sensibles se leen exclusivamente a través de variables de entorno con valores por defecto seguros.
 - **Auditoría de seguridad estática de código (Bandit):** Análisis automatizado de vulnerabilidades en todo el código fuente de `mibici_mlops/` (0 vulnerabilidades de severidad Media o Alta).
 - **Auditoría de vulnerabilidades de dependencias (pip-audit):** Escaneo de la lista de dependencias (`requirements.txt`) contra la base de datos oficial de vulnerabilidades (PyPI / OSV).
-- **`tests/test_train.py`:** 18 pruebas de integración del pipeline end-to-end (`experimento_completo`), manejo de fallos tempranos (*fail-fast*), interfaz de línea de comandos de Typer (`app`), esquema común de tags y parámetros en MLflow, métricas asimétricas (`gmean`, `f1_macro`), monitoreo de drift en variables de entrada y **prueba explícita de reproducibilidad del entrenamiento** (verificando que dos ejecuciones independientes con la misma semilla produzcan idénticas predicciones y métricas).
-
-#### Chequeos de seguridad básicos y buenas prácticas de gobernanza
-- **Protección contra fuga de credenciales:** El archivo `.gitignore` excluye estrictamente archivos de entorno (`.env*`, `.venv`), credenciales locales, bases de datos SQLite transaccionales (`mlflow.db*`), almacén de artefactos (`mlruns/`, `mlartifacts/`), modelos serializados (`*.cbm`, `*.pkl`, `*.skops`, `*.parquet`) y datos crudos/procesados (`/data/**/*`). Las configuraciones sensibles se leen exclusivamente a través de variables de entorno con valores por defecto seguros.
-- **Auditoría de seguridad estática de código (Bandit):** Análisis automatizado de vulnerabilidades en todo el código fuente de `mibici_mlops/` (0 vulnerabilidades de severidad Media o Alta).
-- **Auditoría de vulnerabilidades de dependencias (pip-audit):** Escaneo de la lista de dependencias (`requirements.txt`) contra la base de datos oficial de vulnerabilidades (PyPI / OSV).
 
 #### Comandos de ejecución
 
 ```powershell
-# 1. Ejecución completa de la suite (47 pruebas en ~11 segundos)
-# 1. Ejecución completa de la suite (47 pruebas en ~11 segundos)
+# 1. Ejecución completa de la suite
 pytest tests/ -v
 
 # 2. Ejecución modular por archivo
-pytest tests/test_dataset.py -v          # Ingesta, esquema, manifiesto y DeepChecks
-pytest tests/test_features.py -v         # Features, lags y no data leakage
-pytest tests/test_models.py -v           # Firmas MLflow, inferencia y contratos
-pytest tests/test_train.py -v            # Pipeline, reproducibilidad y orquestación CLI
-pytest tests/test_dataset.py -v          # Ingesta, esquema, manifiesto y DeepChecks
-pytest tests/test_features.py -v         # Features, lags y no data leakage
-pytest tests/test_models.py -v           # Firmas MLflow, inferencia y contratos
-pytest tests/test_train.py -v            # Pipeline, reproducibilidad y orquestación CLI
+pytest tests/test_dataset.py -v
+pytest tests/test_features.py -v
+pytest tests/test_models.py -v
+pytest tests/test_train.py -v
 
-# 3. Ejecución por marcadores funcionales de PyTest
-pytest -m data_quality -v                # Validación de esquemas, integridad y calidad
-pytest -m unit -v                        # Pruebas unitarias de componentes aislados
-pytest -m integration -v                 # Pruebas de integración de pipeline y artefactos
-pytest -m data_quality -v                # Validación de esquemas, integridad y calidad
-pytest -m unit -v                        # Pruebas unitarias de componentes aislados
-pytest -m integration -v                 # Pruebas de integración de pipeline y artefactos
+# 3. Ejecución por marcadores funcionales
+pytest -m data_quality -v
+pytest -m unit -v
+pytest -m integration -v
 
 # 4. Reporte de cobertura de código
 pytest --cov=mibici_mlops --cov-report=term-missing tests/
 
-# 5. Chequeos de seguridad estática de código (Bandit)
-bandit -r mibici_mlops/ -ll              # Análisis de vulnerabilidades de severidad media y alta
-bandit -r mibici_mlops/ -f txt           # Reporte detallado de seguridad
+# 5. Chequeos de seguridad estática
+bandit -r mibici_mlops/ -ll
+bandit -r mibici_mlops/ -f txt
 
-# 6. Auditoría de seguridad en dependencias (pip-audit)
+# 6. Auditoría de dependencias
 pip-audit -r requirements.txt
 
-# 7. Chequeos de calidad, sintaxis y estilo de código (Ruff)
-# 5. Chequeos de seguridad estática de código (Bandit)
-bandit -r mibici_mlops/ -ll              # Análisis de vulnerabilidades de severidad media y alta
-bandit -r mibici_mlops/ -f txt           # Reporte detallado de seguridad
-
-# 6. Auditoría de seguridad en dependencias (pip-audit)
-pip-audit -r requirements.txt
-
-# 7. Chequeos de calidad, sintaxis y estilo de código (Ruff)
+# 7. Calidad y formato del código
 ruff check tests/ mibici_mlops/
 ruff format --check tests/ mibici_mlops/
 ```
@@ -607,20 +551,12 @@ Muestra los tres modelos registrados (mibici-equipo51-p1-demanda, mibici-equipo5
 ## 10. Evidencias de la suite de pruebas y calidad de código (Semana 7)
 
 A continuación se presentan las capturas de evidencia ubicadas en `reports/figures/evidences/week7/` que respaldan la ejecución exitosa de la suite de pruebas, la validación de datos con DeepChecks, la auditoría de seguridad y el análisis estático de código:
-A continuación se presentan las capturas de evidencia ubicadas en `reports/figures/evidences/week7/` que respaldan la ejecución exitosa de la suite de pruebas, la validación de datos con DeepChecks, la auditoría de seguridad y el análisis estático de código:
 
 ### Figura 4. Ejecución exitosa de la suite completa de pruebas (PyTest)
 Muestra la ejecución limpia y determinista de los 47 tests unitarios, de integración y de calidad de datos pasando al 100 % en ~11 segundos:
-Muestra la ejecución limpia y determinista de los 47 tests unitarios, de integración y de calidad de datos pasando al 100 % en ~11 segundos:
 
 ![Ejecución exitosa de la suite completa en PyTest](reports/figures/evidences/week7/captura1_pytest_suite_completa.png)
-![Ejecución exitosa de la suite completa en PyTest](reports/figures/evidences/week7/captura1_pytest_suite_completa.png)
 
-### Figura 5. Ejecución selectiva por archivo y marcadores funcionales
-Muestra la ejecución modular (`test_dataset.py`, `test_features.py`, `test_models.py`, `test_train.py`) y el filtrado por marcadores (`@pytest.mark.data_quality`, `@pytest.mark.unit`, `@pytest.mark.integration`):
-
-![Ejecución por marcadores de PyTest](reports/figures/evidences/week7/captura2_pytest_markers.png)
-![Ejecución por archivo](reports/figures/evidences/week7/captura2_pytest_individuales.png)
 ### Figura 5. Ejecución selectiva por archivo y marcadores funcionales
 Muestra la ejecución modular (`test_dataset.py`, `test_features.py`, `test_models.py`, `test_train.py`) y el filtrado por marcadores (`@pytest.mark.data_quality`, `@pytest.mark.unit`, `@pytest.mark.integration`):
 
@@ -643,18 +579,284 @@ Muestra la conformidad estricta con PEP 8 y buenas prácticas de ingeniería de 
 
 ![Validación de calidad y estilo con Ruff](reports/figures/evidences/week7/captura5_ruff_linter_checks.png)
 
-<!-- TODO - Ingrid - Sección 11: Despliegue de Inferencia con FastAPI y Contenedor OCI (Docker / Podman)
-- Instrucciones para construir la imagen: `podman build -t mibici-api:latest .` o `docker build -t mibici-api:latest .`
-- Instrucciones para levantar el contenedor: `podman run -d -p 8000:8000 -e MLFLOW_TRACKING_URI=http://host.containers.internal:5000 --name mibici-service mibici-api:latest`
-- Ejemplo de petición (curl o python) al endpoint `/predict` y respuesta JSON obtenida.
-- Justificación técnica de la estrategia de despliegue elegida (ej. inferencia en tiempo real para balanceo de flota).
-- Placeholder de evidencia de ejecución exitosa desde el contenedor.
--->
+## 11. Despliegue de Inferencia: API REST con FastAPI y Contenedor OCI (Docker / Podman)
 
-## 11. Organización del repositorio
+### 11.1 Arquitectura y Estrategia de Despliegue
+
+Para la puesta en producción y servicio reproducible del modelo de MiBici, se desarrolló un microservicio REST basado en **FastAPI**, empaquetado bajo el estándar de la **Open Container Initiative (OCI)** mediante un `Containerfile` ejecutable indistintamente en **Podman** o **Docker**.
+
+
+```mermaid
+flowchart TD
+    A["Cliente HTTP"] -->|"POST /predict"| B["Contenedor Docker / Podman"]
+    B --> C["FastAPI + Pydantic"]
+    C --> D["ModelService"]
+    D -->|"1. Intenta cargar @champion"| E[("MLflow Model Registry")]
+    E -.->|"No disponible"| D
+    D -->|"2. Carga alternativa"| F[("Modelo MLflow en volumen local")]
+    E -->|"Modelo disponible"| G["Inferencia CatBoost"]
+    F --> G
+    G --> H["Respuesta JSON"]
+```
+
+
+#### Justificación Técnica: Inferencia en Tiempo Real (Online Serving)
+1. **Dinámica operativa de MiBici:** La demanda horaria de viajes en las estaciones del Área Metropolitana de Guadalajara fluctúa según la hora del día, el día de la semana y eventos recientes. Las decisiones logísticas de balanceo vehicular y redistribución de unidades requieren consultar estimaciones puntuales bajo demanda sobre estaciones críticas en tiempo real para actuar con inmediatez.
+2. **Baja latencia y desacoplamiento:** Exponer un contrato HTTP síncrono (`POST /predict`) permite desacoplar los sistemas cliente (tableros operativos, sistemas de despacho de cuadrillas o aplicaciones de usuario) del motor interno de machine learning.
+3. **Soporte híbrido por lotes (`POST /predict/batch`):** Aunque el caso de uso central es en tiempo real, la API incluye un endpoint vectorizado que permite a procesos por lotes (como cron jobs o pipelines de orquestación) solicitar pronósticos para la red completa de 471 estaciones en una única petición HTTP con sobrecarga mínima.
+
+#### Configuración y Recuperación del Modelo desde MLflow Model Registry
+El microservicio implementa una estrategia dual de recuperación:
+- **Opción A (Predeterminada - Model Registry):** Se configura la variable de entorno `MLFLOW_TRACKING_URI` (por ejemplo, `http://host.containers.internal:5000` al comunicarse con el servidor de MLflow en la máquina host, o `sqlite:///mlflow.db`). La API carga dinámicamente el modelo P1 registrado con el alias de producción: `models:/mibici-equipo51-p1-demanda@champion`.
+- **Opción B (Fallback / Empaquetado local):** Si el servidor de MLflow no está accesible en la red, el servicio busca de forma defensiva los artefactos serializados en `models/p1_champion/`, permitiendo el arranque autónomo (*air-gapped*) del contenedor sin fallas.
+
+---
+
+### 11.2 Construcción de la Imagen del Contenedor
+
+El `Containerfile` se diseñó bajo las mejores prácticas OCI:
+- **Base oficial ligera:** `python:3.10-slim`.
+- **Seguridad:** Ejecución bajo usuario sin privilegios (`appuser`, UID 1000).
+- **Caché multi-capa:** Copia e instala dependencias (`requirements.txt`) antes del código fuente.
+- **Variables OCI:** `PYTHONDONTWRITEBYTECODE=1`, `PYTHONUNBUFFERED=1`, `PORT=8000`.
+
+#### Con Podman:
+```bash
+podman build -t mibici-api:latest -f Containerfile .
+```
+
+#### Con Docker:
+```bash
+docker build -t mibici-api:latest -f Containerfile .
+```
+
+---
+
+### 11.3 Ejecución del Contenedor
+
+El servicio utiliza una estrategia de carga de modelos con dos alternativas:
+
+- **MLflow Model Registry:** la API intenta recuperar el modelo registrado mediante `MLFLOW_TRACKING_URI`, utilizando el alias `champion`.
+- **Modelo local externo:** cuando el Registry no está disponible, la API puede cargar un modelo MLflow previamente preparado en `models/p1_champion/`.
+
+Los modelos serializados no se incluyen en el repositorio GitHub. Para utilizar la segunda alternativa, es necesario disponer previamente del artefacto MLflow del modelo P1, con su archivo `MLmodel` y los archivos asociados.
+
+#### Con Podman (Linux/macOS)
+
+Si el modelo está disponible en el Registry:
+
+```bash
+podman run -d \
+  -p 8000:8000 \
+  -e MLFLOW_TRACKING_URI="http://host.containers.internal:5000" \
+  --name mibici-service \
+  mibici-api:latest
+```
+
+Para utilizar un modelo local externo:
+
+```bash
+podman run -d \
+  -p 8000:8000 \
+  -v "$(pwd)/models/p1_champion:/app/models/p1_champion:ro" \
+  -e MLFLOW_TRACKING_URI="http://host.containers.internal:5000" \
+  --name mibici-service \
+  mibici-api:latest
+```
+
+#### Con Docker (Windows PowerShell)
+
+Si el modelo está disponible en el Registry:
+
+```powershell
+docker run -d `
+  -p 8000:8000 `
+  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 `
+  --name mibici-service `
+  mibici-api:latest
+```
+
+Para utilizar un modelo local externo:
+
+```powershell
+docker run -d `
+  -p 8000:8000 `
+  --name mibici-service `
+  -v "${PWD}\models\p1_champion:/app/models/p1_champion:ro" `
+  -e MLFLOW_TRACKING_URI=http://host.docker.internal:5000 `
+  -e MLFLOW_HTTP_REQUEST_TIMEOUT=3 `
+  -e MLFLOW_HTTP_REQUEST_MAX_RETRIES=0 `
+  mibici-api:latest
+```
+
+El argumento `-v` monta el modelo local dentro del contenedor en modo de solo lectura (`ro`), sin incorporarlo a la imagen Docker.
+
+La API intenta primero conectarse al Model Registry y, si no está disponible, busca el modelo local en `/app/models/p1_champion`.
+
+**Nota:** Para obtener predicciones, debe existir un modelo accesible mediante alguna de las dos alternativas. Si no se encuentra ninguno, la API puede iniciar en estado `degraded`, pero los endpoints de inferencia no estarán disponibles.
+
+#### Verificación del servicio
+
+Consultar los logs de arranque:
+
+```powershell
+docker logs mibici-service
+```
+
+O con Podman:
+
+```bash
+podman logs mibici-service
+```
+
+La documentación interactiva de la API estará disponible en:
+
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
+
+Para comprobar que el modelo está cargado, consultar `GET /health` y verificar que la respuesta incluya `"model_loaded": true` y `"status": "ok"`.
+
+
+---
+### 11.4 Consumo de la API y Ejemplos de Petición/Respuesta
+
+Una vez activo el contenedor, la documentación interactiva OpenAPI está disponible en:
+- **Swagger UI:** [http://localhost:8000/docs](http://localhost:8000/docs)
+- **ReDoc:** [http://localhost:8000/redoc](http://localhost:8000/redoc)
+
+#### 1. Verificación de Salud (`GET /health`)
+```bash
+curl -X GET http://localhost:8000/health
+```
+```json
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_name": "mibici-equipo51-p1-demanda",
+  "model_alias": "champion",
+  "tracking_uri": "http://host.containers.internal:5000",
+  "version": "1.0.0",
+  "timestamp": "2026-11-05T06:00:00.000000+00:00"
+}
+```
+
+#### 2. Inferencia en Tiempo Real (`POST /predict`)
+
+Se realizó una petición de prueba para estimar la demanda horaria de la estación `1`, utilizando el modelo CatBoost P1 cargado desde un volumen externo en Docker.
+
+**Petición (Windows PowerShell):**
+
+```powershell
+$body = @{
+    station_id = "1"
+    hour_of_day = 8
+    day_of_week = 2
+    is_weekend = 0
+    month = 11
+    lag_1 = 3
+    lag_24 = 4
+    lag_168 = 2
+    rolling_mean_3h = 3.0
+    rolling_mean_24h = 2.5
+    history_hours = 168
+} | ConvertTo-Json
+
+Invoke-RestMethod -Uri "http://localhost:8000/predict" -Method Post -ContentType "application/json" -Body $body
+```
+
+**Respuesta obtenida (HTTP 200):**
+
+```json
+{
+  "station_id": "1",
+  "predicted_demand": 4.5648,
+  "model_name": "mibici-equipo51-p1-demanda",
+  "model_alias": "champion",
+  "timestamp": "2026-11-07T17:56:47.457671+00:00"
+}
+```
+
+La respuesta confirma que el endpoint ejecuta correctamente la inferencia y devuelve una predicción en formato JSON.
+
+El campo `model_alias` indica el alias configurado para el servicio. En esta prueba, los logs de arranque confirmaron que el modelo se cargó desde el volumen local, debido a que el servidor MLflow Registry no estaba disponible.
+
+#### 3. Inferencia en Lote (`POST /predict/batch`)
+```bash
+curl -X POST http://localhost:8000/predict/batch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "observations": [
+      {
+        "station_id": "2",
+        "hour_of_day": 8,
+        "day_of_week": 1,
+        "is_weekend": 0,
+        "month": 6,
+        "lag_1": 1.0,
+        "lag_24": 2.0,
+        "lag_168": 3.0,
+        "rolling_mean_3h": 1.5,
+        "rolling_mean_24h": 2.2,
+        "history_hours": 168.0
+      },
+      {
+        "station_id": "3",
+        "hour_of_day": 18,
+        "day_of_week": 4,
+        "is_weekend": 0,
+        "month": 6,
+        "lag_1": 5.0,
+        "lag_24": 4.0,
+        "lag_168": 6.0,
+        "rolling_mean_3h": 4.5,
+        "rolling_mean_24h": 3.8,
+        "history_hours": 168.0
+      }
+    ]
+  }'
+```
+Respuesta obtenida:
+```json
+{
+  "predictions": [
+    {
+      "station_id": "2",
+      "predicted_demand": 4.0991,
+      "model_name": "mibici-equipo51-p1-demanda",
+      "model_alias": "champion",
+      "timestamp": "2026-11-05T06:00:00.000000+00:00"
+    },
+    {
+      "station_id": "3",
+      "predicted_demand": 6.3214,
+      "model_name": "mibici-equipo51-p1-demanda",
+      "model_alias": "champion",
+      "timestamp": "2026-11-05T06:00:00.000000+00:00"
+    }
+  ],
+  "total_observations": 2,
+  "timestamp": "2026-11-05T06:00:00.000000+00:00"
+}
+```
+
+---
+
+### 11.5 Evidencia de la Ejecución en Contenedor
+
+A continuación se presenta la evidencia de la API respondiendo exitosamente a una petición de inferencia desde el contenedor:
+
+### Figura 9. Inferencia exitosa desde Docker con modelo externo
+
+Se muestra la respuesta del endpoint `POST /predict` ejecutado dentro de un contenedor Docker, utilizando un modelo CatBoost empaquetado con MLflow y montado mediante un volumen de solo lectura. La API devuelve el código HTTP 200 y una predicción de demanda de `4.5648`, demostrando que el servicio puede realizar inferencias sin incorporar el modelo serializado a la imagen.
+
+![Predicción exitosa de la API FastAPI ejecutada en Docker con modelo externo montado mediante volumen](reports/figures/evidences/week8/captura_api_docker_volumen_predict.png)
+
+## 12. Organización del repositorio
 
 ```text
 TC5061-Proyecto-Equipo51/
+├── Containerfile                         # Especificación OCI de contenedor (Podman/Docker)
+├── .dockerignore                         # Exclusiones de contexto OCI
 ├── data/
 │   ├── raw/                              # CSV descargados; ignorados por Git
 │   └── processed/                        # Datos procesados; ignorados por Git
@@ -663,54 +865,41 @@ TC5061-Proyecto-Equipo51/
 │       ├── nomenclature/                 # Parquet de estaciones
 │       └── p2/                           # Dataset y métricas de P2
 ├── docs/                                 # Sitio de documentación con MkDocs
-│   ├── docs/
-│   │   ├── getting-started.md
-│   │   └── index.md
-│   └── mkdocs.yml
-├── MLproject                             # Especificación MLproject con entry points (ingest, train, verify_registry, predict)
-├── python_env.yaml                       # Especificación de entorno Python con versiones fijadas
+├── MLproject                             # Especificación MLproject con entry points
+├── python_env.yaml                       # Especificación de entorno Python
 ├── mibici_mlops/
+│   ├── api/
+│   │   ├── main.py                       # Servidor REST FastAPI y endpoints
+│   │   ├── schemas.py                    # Esquemas Pydantic v2 de entrada y salida
+│   │   └── service.py                    # Conexión MLflow Registry e inferencia
 │   ├── modeling/
-│   │   ├── predict.py                    # Inferencia en lote y verificación programática (@champion / @challenger)
-│   │   └── train.py                      # Entrenamiento modular, Nested Runs y Model Registry para P1, P2 y P3
+│   │   ├── predict.py                    # Inferencia en lote y verificación programática
+│   │   └── train.py                      # Entrenamiento modular y Model Registry
 │   ├── config.py                         # Rutas, periodos, semilla y configuración común
 │   ├── dataset.py                        # Ingesta, limpieza, validación y manifiesto
 │   ├── features.py                       # Características de las tres preguntas
 │   ├── plots.py                          # Utilidades gráficas
 │   └── quality.py                        # Validación de integridad y reportes con DeepChecks
-│   ├── plots.py                          # Utilidades gráficas
-│   └── quality.py                        # Validación de integridad y reportes con DeepChecks
-├── models/
-│   └── p2/modelo_p2.skops                 # Modelo local generado; ignorado por Git
-├── notebooks/
-│   ├── 1.0-gd-exploracion-p1.ipynb
-│   ├── 1.0-ih-p2-eda.ipynb
-│   └── 1.0-at-exploracion-p3-clustering.ipynb
-├── references/                           # ML Canvas y arquitectura versionados
+├── models/                               # Modelos locales y empaquetados; ignorados por Git
 ├── reports/
 │   ├── data_quality/                     # Reportes JSON de auditoría DeepChecks
-│   ├── data_quality/                     # Reportes JSON de auditoría DeepChecks
 │   └── figures/
-│       ├── p2/                           # Matrices de confusión generadas por P2
 │       ├── evidences/
 │       │   ├── week5/                    # Evidencias de seguimiento base
 │       │   ├── week6/                    # Capturas de MLflow UI, Nested Runs y Model Registry
-│       │   └── week7/                    # Capturas de ejecución de PyTest, DeepChecks, Bandit y Ruff
-│       │   └── week7/                    # Capturas de ejecución de PyTest, DeepChecks, Bandit y Ruff
-│       ├── p1_champion/ y p1_challenger/   # Diagnósticos de P1
-│       ├── p2_champion/ y p2_challenger/   # Diagnósticos de P2
-│       ├── p3_champion/ y p3_challenger/   # Mapas y perfiles de P3
-│       └── p3_clusters_spatial.png       # Mapa local generado por P3
+│       │   ├── week7/                    # Capturas de PyTest, DeepChecks, Bandit y Ruff
+│       │   └── week8/                    # Capturas de ejecución en contenedor OCI
+│       ├── p1_champion/ y p1_challenger/
+│       ├── p2_champion/ y p2_challenger/
+│       └── p3_champion/ y p3_challenger/
 ├── tests/
 │   ├── conftest.py                       # Fixtures sintéticos compartidos en memoria
-│   ├── test_dataset.py                   # Ingesta, esquema, hash SHA-256 y DeepChecks
+│   ├── test_api.py                       # Pruebas de endpoints FastAPI, schemas e inferencia
 │   ├── test_dataset.py                   # Ingesta, esquema, hash SHA-256 y DeepChecks
 │   ├── test_features.py                  # Rezagos, rolling, no data leakage y clustering P3
 │   ├── test_models.py                    # Firmas MLflow, inferencia determinista y edge cases
 │   └── test_train.py                     # Pipeline: Reproducibilidad, drift, tags y métricas
-│   └── test_train.py                     # Pipeline: Reproducibilidad, drift, tags y métricas
 ├── data_manifest.json                    # Versión exacta de las fuentes
-├── Makefile
 ├── pyproject.toml
 ├── requirements.txt                      # Dependencias fijadas
 └── README.md
@@ -718,7 +907,7 @@ TC5061-Proyecto-Equipo51/
 
 Las carpetas internas mostradas para datos y modelos se completan después de ejecutar el flujo. Los datos y modelos generados, junto con `mlruns/`, `mlartifacts/` y `mlflow.db`, se excluyen mediante `.gitignore`. Las figuras y capturas de `reports/figures/` sí se conservan en Git. El repositorio conserva código, configuración, pruebas, documentación y metadatos reproducibles.
 
-## 12. Limitaciones y trabajo futuro
+## 13. Limitaciones y trabajo futuro
 
 - Los modelos no incorporan clima, eventos, cierres viales ni festivos externos.
 
@@ -732,7 +921,7 @@ Las carpetas internas mostradas para datos y modelos se completan después de ej
 
 - Un uso operativo necesitaría automatización, monitoreo de calidad y una interfaz para consumir predicciones y segmentos.
 
-## 13. Referencias
+## 14. Referencias
 
 - Apache Software Foundation. (s. f.). *Reading and writing the Apache Parquet format*. Apache Arrow. Recuperado el 17 de octubre de 2026, de [https://arrow.apache.org/docs/python/parquet/index.html](https://arrow.apache.org/docs/python/parquet/index.html)
 
