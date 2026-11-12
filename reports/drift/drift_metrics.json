@@ -1,0 +1,101 @@
+{
+  "dataset_drift_detected": false,
+  "drift_share": 0.5,
+  "number_of_columns": 12,
+  "number_of_drifted_columns": 4,
+  "share_of_drifted_columns": 0.3333333333333333,
+  "columns_drift": {
+    "trips_started": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 0.07528121106596783,
+      "drift_detected": false
+    },
+    "history_hours": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 2.1132839520600535,
+      "drift_detected": true
+    },
+    "lag_1": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 0.06579204349755416,
+      "drift_detected": false
+    },
+    "lag_168": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 0.0832783289547933,
+      "drift_detected": false
+    },
+    "lag_24": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 0.07390101289524906,
+      "drift_detected": false
+    },
+    "rolling_mean_24h": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 0.14723767853308437,
+      "drift_detected": true
+    },
+    "rolling_mean_3h": {
+      "column_type": "num",
+      "stattest_name": "Wasserstein distance (normed)",
+      "threshold": 0.1,
+      "drift_score": 0.0860389483591711,
+      "drift_detected": false
+    },
+    "station_id": {
+      "column_type": "cat",
+      "stattest_name": "Jensen-Shannon distance",
+      "threshold": 0.1,
+      "drift_score": 0.22805202385958329,
+      "drift_detected": true
+    },
+    "hour_of_day": {
+      "column_type": "cat",
+      "stattest_name": "Jensen-Shannon distance",
+      "threshold": 0.1,
+      "drift_score": 0.012105755242824652,
+      "drift_detected": false
+    },
+    "day_of_week": {
+      "column_type": "cat",
+      "stattest_name": "Jensen-Shannon distance",
+      "threshold": 0.1,
+      "drift_score": 0.007931794926787283,
+      "drift_detected": false
+    },
+    "is_weekend": {
+      "column_type": "cat",
+      "stattest_name": "Jensen-Shannon distance",
+      "threshold": 0.1,
+      "drift_score": 0.0016981285116056037,
+      "drift_detected": false
+    },
+    "month": {
+      "column_type": "cat",
+      "stattest_name": "Jensen-Shannon distance",
+      "threshold": 0.1,
+      "drift_score": 0.5110890186975844,
+      "drift_detected": true
+    }
+  },
+  "missing_values": {
+    "reference_nulls": 0,
+    "current_nulls": 0
+  },
+  "reference_records": 30000,
+  "current_records": 30000,
+  "reference_period": "2024-01-01 a 2025-12-31",
+  "current_period": "2026-05-01 a 2026-09-30"
+}

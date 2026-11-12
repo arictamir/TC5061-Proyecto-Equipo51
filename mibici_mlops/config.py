@@ -22,6 +22,7 @@ MODELS_DIR = PROJ_ROOT / "models"
 REPORTS_DIR = PROJ_ROOT / "reports"
 FIGURES_DIR = REPORTS_DIR / "figures"
 DATA_QUALITY_DIR = REPORTS_DIR / "data_quality"
+DRIFT_REPORT_DIR = REPORTS_DIR / "drift"
 
 # MiBici dataset configuration
 MIBICI_OPEN_DATA_URL = "https://mibici.net/es/datos-abiertos/"
