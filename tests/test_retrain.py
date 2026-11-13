@@ -85,6 +85,12 @@ def test_train_challenger_fast_execution() -> None:
     assert metrics["prueba_rmse"] >= 0.0
 
 
+def test_retrain_rejects_champion_alias() -> None:
+    """Impide reemplazar el alias productivo desde el reentrenamiento."""
+    with pytest.raises(ValueError, match="no se permite modificar @champion"):
+        train_and_register_challenger(alias="champion")
+
+
 def test_cli_retrain_help() -> None:
     """Verifica que el comando CLI muestre la ayuda sin errores."""
     result = runner.invoke(app, ["--help"])

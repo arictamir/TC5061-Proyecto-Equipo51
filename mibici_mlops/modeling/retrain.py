@@ -65,6 +65,7 @@ CATEGORICAL_COLUMNS: list[str] = [
 ]
 
 TARGET_COLUMN: str = "trips_started"
+CHALLENGER_ALIAS: str = "challenger"
 
 
 def load_retraining_data(
@@ -138,7 +139,8 @@ def train_and_register_challenger(
     max_eval_samples: int = 50000,
     include_recent_history: bool = True,
     register_in_registry: bool = True,
-    alias: str = "challenger",
+    alias: str = CHALLENGER_ALIAS,
+    features_path: Path | None = None,
 ) -> dict[str, Any]:
     """Entrena la versión alternativa Challenger y la registra en el Model Registry de MLflow.
 
@@ -156,10 +158,17 @@ def train_and_register_challenger(
     Returns:
         Diccionario con run_id, métricas evaluadas, parámetros y número de versión en el Registry.
     """
+    if alias != CHALLENGER_ALIAS:
+        raise ValueError(
+            "La versión alternativa solo puede registrarse con el alias "
+            f"@{CHALLENGER_ALIAS}; no se permite modificar @champion."
+        )
+
     configurar_mlflow()
     commit_hash = obtener_commit_git()
 
     train_df, eval_df, feat_cols, cat_cols, target = load_retraining_data(
+        features_path=features_path,
         include_recent_history=include_recent_history,
         max_train_samples=max_train_samples,
         max_eval_samples=max_eval_samples,
@@ -296,13 +305,23 @@ def train_and_register_challenger(
         # Obtener el número de versión asignado
         try:
             alias_version_info = client.get_model_version_by_alias(MODEL_REGISTRY_P1, alias)
+
+            if alias_version_info.run_id != run_id:
+                raise RuntimeError(
+                    f"El alias @{alias} apunta al run "
+                    f"{alias_version_info.run_id}, pero se esperaba {run_id}."
+                )
+
             registered_version = int(alias_version_info.version)
             logger.success(
-                f"Model Registry actualizado con éxito: '{MODEL_REGISTRY_P1}' v{registered_version} "
-                f"asignado con alias @{alias}."
+                f"Model Registry actualizado: '{MODEL_REGISTRY_P1}' "
+                f"v{registered_version} asignado con alias @{alias}."
             )
-        except Exception as e:  # noqa: BLE001
-            logger.warning(f"No se pudo consultar la versión recién registrada con alias @{alias}: {e}")
+        except Exception as exc:
+            raise RuntimeError(
+                "No se pudo verificar el registro del nuevo Challenger "
+                f"con run_id={run_id}."
+            ) from exc
 
     return {
         "run_id": run_id,
