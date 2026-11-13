@@ -2,6 +2,7 @@ bandit==1.9.4
 beautifulsoup4==4.15.0
 catboost==1.2.10
 deepchecks==0.19.1
+evidently==0.7.23
 fastapi==0.146.0
 httpx==0.28.1
 ipykernel==7.3.0
