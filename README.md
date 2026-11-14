@@ -851,7 +851,95 @@ Se muestra la respuesta del endpoint `POST /predict` ejecutado dentro de un cont
 
 ![Predicción exitosa de la API FastAPI ejecutada en Docker con modelo externo montado mediante volumen](reports/figures/evidences/week8/captura_api_docker_volumen_predict.png)
 
-## 12. Organización del repositorio
+## 12. Monitoreo, Reporte de Data Drift y A/B Testing (Observabilidad)
+
+En esta etapa se incorporó al proyecto MiBici la capacidad de observabilidad continua y vigilancia activa en producción, permitiendo detectar cuándo los datos reales se desvían de los de entrenamiento y decidir con evidencia estadística cuál versión del modelo ofrece un mejor desempeño.
+
+El reporte analítico exhaustivo se encuentra disponible en [`reports/drift/observability_ab_report.md`](reports/drift/observability_ab_report.md).
+
+### 12.1 Justificación de Periodos de Datos
+Para evaluar la estabilidad de las distribuciones y el comportamiento en producción, se definieron dos particiones temporales a partir de los datos abiertos de MiBici:
+
+| Conjunto | Periodo Temporal | Registros Totales | Rol en el Monitoreo |
+|---|---|---|---|
+| **Referencia ($D_{ref}$)** | `2024-01-01` a `2025-12-31` | 6,338,700 filas | Periodo histórico de entrenamiento con el que se ajustó el modelo base Champion. |
+| **Actual ($D_{curr}$)** | `2026-05-01` a `2026-09-30` | 1,560,439 filas | Periodo productivo posterior que refleja la dinámica más reciente de la red MiBici. |
+
+- **Justificación:** La referencia cubre dos años completos para capturar la ciclicidad estacional de 12 meses y las dinámicas semanales y horarias. El periodo actual evalúa la degradación potencial ocasionada por el crecimiento del sistema, la incorporación de nuevas estaciones en el Área Metropolitana de Guadalajara y la temporada de lluvias (junio a septiembre).
+
+### 12.2 Detección de Data Drift con Evidently
+El pipeline implementado en [`mibici_mlops/monitoring.py`](mibici_mlops/monitoring.py) evalúa la deriva de datos mediante las pruebas estadísticas recomendadas por Evidently (`DataDriftPreset` y `DataQualityPreset`):
+
+```powershell
+# Ejecución del reporte de Data Drift
+python -m mibici_mlops.monitoring run-drift-check --sample-size 30000
+
+# Consulta del resumen en consola
+python -m mibici_mlops.monitoring show-drift-summary
+```
+
+- **Reporte Interactivo HTML:** [`reports/drift/data_drift_report.html`](reports/drift/data_drift_report.html)
+- **Métricas Estructuradas JSON:** [`reports/drift/drift_metrics.json`](reports/drift/drift_metrics.json)
+
+**Resultados Clave:**
+- **Deriva del Dataset:** No detectada a nivel global (4 de 12 variables con drift, equivalente al 33.3%, por debajo del umbral del 50.0%).
+- **Variables con Drift Significativo ($p < 0.05$):**
+  - `month` (drift score = 0.5111, Jensen-Shannon): Deriva estructural por evaluar los meses 5 a 9 frente a los 12 meses históricos.
+  - `history_hours` (drift score = 2.1133, Wasserstein): Variable temporal acumulativa que supera las 20,000 horas en 2026.
+  - `station_id` (drift score = 0.2281, Jensen-Shannon): Incorporación de nuevas cicloestaciones y redistribución de viajes.
+  - `rolling_mean_24h` (drift score = 0.1472, Wasserstein): Incremento sostenido en la demanda media diaria del sistema.
+- **Variables Estables:** `hour_of_day` (score = 0.0121), `day_of_week` (score = 0.0079), `is_weekend` (score = 0.0017), `trips_started` (score = 0.0753), `lag_1`, `lag_24`, `lag_168`, `rolling_mean_3h`.
+
+### 12.3 Versión Alternativa (Challenger) en MLflow Model Registry
+Ante la presencia de deriva en promedios móviles y variables temporales, se implementó el módulo [`mibici_mlops/modeling/retrain.py`](mibici_mlops/modeling/retrain.py) para entrenar una versión alternativa adaptada (Challenger) incorporando una ventana de datos extendida (2024 hasta 2026-04) e hiperparámetros optimizados (`depth=7, lr=0.08, iter=220, l2=4.0`):
+
+```powershell
+# Reentrenamiento y registro automático en MLflow Model Registry
+python -m mibici_mlops.modeling.retrain retrain-p1-challenger --depth 7 --learning-rate 0.08 --iterations 220
+
+# Consulta del catálogo de versiones
+python -m mibici_mlops.modeling.retrain show-registry-status
+```
+
+Ambas versiones quedaron registradas en el catálogo de MLflow bajo el modelo `mibici-equipo51-p1-demanda`:
+- **Versión 3 (`@champion`):** Modelo productivo base (entrenado con ventana histórica 2024–2025).
+- **Versión 5 (`@challenger`):** Versión alternativa adaptada ante el data drift.
+
+### 12.4 Ejercicio de A/B Testing en Periodo Actual
+A través de [`mibici_mlops/modeling/ab_testing.py`](mibici_mlops/modeling/ab_testing.py), ambas versiones se evaluaron sobre la misma muestra representativa (50,000 filas de $D_{curr}$) bajo condiciones idénticas:
+
+```powershell
+python -m mibici_mlops.modeling.ab_testing run-ab-test --sample-size 50000
+```
+
+| Métrica de Desempeño | Champion (`@champion` v3) | Challenger (`@challenger` v5) | Diferencia | Interpretación |
+|---|---|---|---|---|
+| **RMSE (Error Cuadrático)** | **1.4285** | 1.4360 | +0.0075 (+0.5%) | Champion penaliza mejor los errores extremos globales. |
+| **MAE Global** | **0.7889** | 0.8144 | +0.0255 (+3.2%) | Champion mantiene menor error absoluto promedio. |
+| **MAE en Demanda Positiva ($y > 0$)** | 1.3291 | **1.3090** | **-0.0201 (-1.5%)** | 🏆 **Challenger es superior en estaciones activas con viajes.** |
+| **RMSE en Demanda Positiva ($y > 0$)** | 2.0336 | **2.0120** | **-0.0216 (-1.1%)** | 🏆 **Challenger presenta menor RMSE en viajes activos.** |
+| **Coeficiente $R^2$** | **0.6565** | 0.6529 | -0.0036 | Capacidad explicativa similar (~65.5%). |
+| **Sesgo Medio de Residuales ($\mu_{error}$)** | +0.1206 | **+0.0024** | -0.1182 | 🏆 **Challenger presenta menor sesgo promedio, con predicciones más centradas respecto a los valores reales.** |
+| **Latencia por 1k Inferencias** | 3.21 ms | **2.37 ms** | **-0.84 ms (-26.2%)** | 🏆 **Challenger es más veloz en inferencia por lote.** |
+
+- **Prueba de Significancia Estadística (Paired t-test):** $t = -18.4070$, $p = 2.05 \times 10^{-75}$ ($p \ll 0.05$), confirmando que la diferencia en comportamiento predictivo es estadísticamente significativa.
+- **Gráficos Generados en [`reports/figures/ab_testing/`](reports/figures/ab_testing/):**
+  - `ab_metrics_comparison.png` (comparación de RMSE, MAE y MAE positivo).
+  - `ab_residuals_distribution.png` (densidad de residuales y sesgo).
+  - `ab_hourly_error.png` (error medio por hora del día).
+
+### 12.5 Decisión Justificada de la Versión Vigente
+Se decide **mantener la Versión 3 (`@champion`) como versión productiva vigente en el endpoint `/predict` de la API REST**:
+1. En el balance general de la red MiBici, existe una alta proporción de estaciones y horas con demanda cero o baja (zonas periféricas y madrugadas), donde Champion logra un mejor balance global (RMSE de 1.4285 vs 1.4360).
+2. La Versión 5 se mantiene catalogada en el Model Registry como `@challenger`. Su ventaja en estaciones con viajes activos (MAE positivo de 1.3090 vs 1.3291) la perfila como un candidato listo para entrar a producción si el volumen de viajes continúa en expansión.
+
+### 12.6 Estrategia de Reentrenamiento Continuo (Continuous Training - CT)
+Se establece la siguiente política operativa para gobernar el ciclo de vida del modelo:
+- **Disparador por Drift:** Reentrenar cuando Evidently detecte drift en más del 40% de las variables clave o cuando la distancia Wasserstein en `rolling_mean_24h` supere 0.20.
+- **Disparador por Desempeño:** Reentrenar si el MAE en viajes activos supera 1.40 viajes/hora durante 7 días continuos en las peticiones registradas por la API.
+- **Compuerta de Calidad (Quality Gate):** Ningún modelo reentrenado sustituirá a `@champion` sin superar una prueba t pareada ($p < 0.05$) con menor RMSE global en el conjunto de holdout más reciente.
+
+## 13. Organización del repositorio
 
 ```text
 TC5061-Proyecto-Equipo51/
@@ -873,17 +961,27 @@ TC5061-Proyecto-Equipo51/
 │   │   ├── schemas.py                    # Esquemas Pydantic v2 de entrada y salida
 │   │   └── service.py                    # Conexión MLflow Registry e inferencia
 │   ├── modeling/
+│   │   ├── ab_testing.py                 # Protocolo de A/B testing entre Champion y Challenger
 │   │   ├── predict.py                    # Inferencia en lote y verificación programática
+│   │   ├── retrain.py                    # Reentrenamiento y registro de Challenger en MLflow
 │   │   └── train.py                      # Entrenamiento modular y Model Registry
 │   ├── config.py                         # Rutas, periodos, semilla y configuración común
 │   ├── dataset.py                        # Ingesta, limpieza, validación y manifiesto
 │   ├── features.py                       # Características de las tres preguntas
+│   ├── monitoring.py                     # Monitoreo de Data Drift y Calidad con Evidently
 │   ├── plots.py                          # Utilidades gráficas
 │   └── quality.py                        # Validación de integridad y reportes con DeepChecks
 ├── models/                               # Modelos locales y empaquetados; ignorados por Git
 ├── reports/
 │   ├── data_quality/                     # Reportes JSON de auditoría DeepChecks
+│   ├── drift/                            # Reportes de Data Drift y A/B testing (HTML, JSON, Markdown)
+│   │   ├── data_drift_report.html        # Reporte interactivo con Evidently
+│   │   ├── drift_metrics.json            # Métricas estructuradas de deriva
+│   │   ├── drift_summary.md              # Resumen ejecutivo de drift
+│   │   ├── ab_testing_results.json       # Resultados estructurados de A/B testing
+│   │   └── observability_ab_report.md    # Reporte integral de observabilidad
 │   └── figures/
+│       ├── ab_testing/                   # Gráficos comparativos de métricas y residuales A/B
 │       ├── evidences/
 │       │   ├── week5/                    # Evidencias de seguimiento base
 │       │   ├── week6/                    # Capturas de MLflow UI, Nested Runs y Model Registry
@@ -894,6 +992,9 @@ TC5061-Proyecto-Equipo51/
 │       └── p3_champion/ y p3_challenger/
 ├── tests/
 │   ├── conftest.py                       # Fixtures sintéticos compartidos en memoria
+│   ├── test_ab_testing.py                # Pruebas de A/B testing, residuales y significancia
+│   ├── test_monitoring.py                # Pruebas de Evidently, data drift y métricas
+│   ├── test_retrain.py                   # Pruebas de reentrenamiento y registro Challenger
 │   ├── test_api.py                       # Pruebas de endpoints FastAPI, schemas e inferencia
 │   ├── test_dataset.py                   # Ingesta, esquema, hash SHA-256 y DeepChecks
 │   ├── test_features.py                  # Rezagos, rolling, no data leakage y clustering P3
@@ -907,7 +1008,7 @@ TC5061-Proyecto-Equipo51/
 
 Las carpetas internas mostradas para datos y modelos se completan después de ejecutar el flujo. Los datos y modelos generados, junto con `mlruns/`, `mlartifacts/` y `mlflow.db`, se excluyen mediante `.gitignore`. Las figuras y capturas de `reports/figures/` sí se conservan en Git. El repositorio conserva código, configuración, pruebas, documentación y metadatos reproducibles.
 
-## 13. Limitaciones y trabajo futuro
+## 14. Limitaciones y trabajo futuro
 
 - Los modelos no incorporan clima, eventos, cierres viales ni festivos externos.
 
@@ -921,7 +1022,7 @@ Las carpetas internas mostradas para datos y modelos se completan después de ej
 
 - Un uso operativo necesitaría automatización, monitoreo de calidad y una interfaz para consumir predicciones y segmentos.
 
-## 14. Referencias
+## 15. Referencias
 
 - Apache Software Foundation. (s. f.). *Reading and writing the Apache Parquet format*. Apache Arrow. Recuperado el 17 de octubre de 2026, de [https://arrow.apache.org/docs/python/parquet/index.html](https://arrow.apache.org/docs/python/parquet/index.html)
 

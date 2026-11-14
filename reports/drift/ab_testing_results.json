@@ -1,0 +1,73 @@
+{
+  "model_name": "mibici-equipo51-p1-demanda",
+  "evaluation_period": "2026-05-01 00:00:00 a 2026-09-30",
+  "evaluation_records": 50000,
+  "champion_info": {
+    "version": 3,
+    "alias": "champion",
+    "description": "Champion: CatBoost depth=6, lr=0.10. Commit: dff6beb701a0fcacca16de358b84a17748949a54",
+    "metrics": {
+      "mae": 0.7889,
+      "rmse": 1.4285,
+      "r2": 0.6565,
+      "wape": 0.6358,
+      "mae_positive": 1.3291,
+      "rmse_positive": 2.0336,
+      "residual_mean": 0.1206,
+      "residual_std": 1.4234,
+      "error_p50": 0.4337,
+      "error_p90": 1.959,
+      "error_p95": 2.8283,
+      "latency_ms_per_1k": 3.21,
+      "throughput_preds_per_s": 311060.6
+    }
+  },
+  "challenger_info": {
+    "version": 5,
+    "alias": "challenger",
+    "description": "Challenger: CatBoost depth=7, lr=0.08, iter=220, l2=4.0. Adaptado ante data drift con ventana extendida. Commit: 6f4e24ed446834c81275fdabdd1710ec86dd1d3f",
+    "metrics": {
+      "mae": 0.8144,
+      "rmse": 1.436,
+      "r2": 0.6529,
+      "wape": 0.6564,
+      "mae_positive": 1.309,
+      "rmse_positive": 2.012,
+      "residual_mean": 0.0024,
+      "residual_std": 1.436,
+      "error_p50": 0.4669,
+      "error_p90": 1.9984,
+      "error_p95": 2.8318,
+      "latency_ms_per_1k": 2.37,
+      "throughput_preds_per_s": 421610.1
+    }
+  },
+  "metrics_difference_challenger_minus_champion": {
+    "rmse_diff": 0.0075,
+    "mae_diff": 0.0255,
+    "mae_positive_diff": -0.0201
+  },
+  "statistical_test": {
+    "paired_t_statistic": -18.407,
+    "p_value": 2.0496498501267273e-75,
+    "mean_absolute_error_difference": -0.02551,
+    "is_statistically_significant": true,
+    "significance_threshold": 0.05,
+    "statistical_conclusion": "Champion presenta un error significativamente menor que Challenger (p < 0.05)."
+  },
+  "decision": {
+    "recommended_active_version": "champion",
+    "active_version_number": 3,
+    "decision_justification": "Se recomienda mantener la Versión 3 (@champion) como versión productiva vigente. Champion conserva un error global menor (RMSE 1.4285 vs 1.4360, MAE 0.7889 vs 0.8144) y latencia balanceada (3.21 ms/1k). No obstante, Challenger (v5) demostró competitividad en viajes activos (MAE positivo 1.3090), lo que fundamenta mantenerla lista en el Registry y adoptar una política de Reentrenamiento Continuo (CT)."
+  },
+  "continuous_training_recommendation": {
+    "trigger_condition": "Drift significativo en >40% de columnas clave o aumento de MAE > 10% en ventana rodante de 14 días.",
+    "recommended_cadence": "Reentrenamiento mensual automatizado con ventana deslizante de 12 a 24 meses.",
+    "validation_gate": "La nueva versión reentrenada solo debe sustituir a @champion si supera el test de A/B testing con p < 0.05 y menor RMSE en datos de holdout."
+  },
+  "figures": [
+    "reports/figures/ab_testing/ab_metrics_comparison.png",
+    "reports/figures/ab_testing/ab_residuals_distribution.png",
+    "reports/figures/ab_testing/ab_hourly_error.png"
+  ]
+}
