@@ -1,0 +1,34 @@
+# ==============================================================================
+# Docker Compose: Arquitectura Multi-servicio MiBici MLOps
+# Entregable: Microservicios, CI/CD y FinOps
+# Responsable: Ari
+# ==============================================================================
+
+services:
+  # TODO (Ari): Configurar servicio de MLflow Tracking y Model Registry
+  # - Definir imagen y comando de ejecución del servidor MLflow
+  # - Configurar puertos (ej. 5000:5000), variables de entorno y persistencia (backend store y artefactos)
+  # - Configurar healthcheck y red interna
+  mlflow:
+    image: python:3.10-slim
+    container_name: mibici-mlflow
+    command: ["echo", "TODO: Configurar comando de inicio de MLflow"]
+
+  # TODO (Ari): Configurar microservicio de API de inferencia (FastAPI)
+  # - Configurar contexto de build apuntando a Containerfile
+  # - Configurar puertos expuestos (ej. 8000:8000) y variables de entorno (ej. MLFLOW_TRACKING_URI)
+  # - Establecer dependencia con MLflow (depends_on), healthcheck y límites de recursos
+  inference-api:
+    build:
+      context: .
+      dockerfile: Containerfile
+    container_name: mibici-inference-api
+
+# TODO (Ari): Configurar red compartida (bridge) para comunicación DNS interna entre contenedores
+# networks:
+#   mibici-network:
+#     driver: bridge
+
+# TODO (Ari): Configurar volúmenes persistentes para almacenamiento de MLflow y modelos
+# volumes:
+#   mlflow-data:
