@@ -1,34 +1,117 @@
 # ==============================================================================
 # Docker Compose: Arquitectura Multi-servicio MiBici MLOps
-# Entregable: Microservicios, CI/CD y FinOps
-# Responsable: Ari
+# Orquestación de Microservicio de Inferencia (FastAPI) y Servidor MLflow
 # ==============================================================================
 
 services:
-  # TODO (Ari): Configurar servicio de MLflow Tracking y Model Registry
-  # - Definir imagen y comando de ejecución del servidor MLflow
-  # - Configurar puertos (ej. 5000:5000), variables de entorno y persistencia (backend store y artefactos)
-  # - Configurar healthcheck y red interna
+  # ----------------------------------------------------------------------------
+  # Servicio 1: Servidor de MLflow Tracking y Model Registry
+  # ----------------------------------------------------------------------------
   mlflow:
-    image: python:3.10-slim
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: mibici-mlops-service:latest
     container_name: mibici-mlflow
-    command: ["echo", "TODO: Configurar comando de inicio de MLflow"]
+    restart: unless-stopped
+    command:
+      - mlflow
+      - server
+      - --host
+      - 0.0.0.0
+      - --port
+      - "5000"
+      - --backend-store-uri
+      - sqlite:////app/mlflow.db
+      - --default-artifact-root
+      - /app/models
+    ports:
+      - "${MLFLOW_PORT:-5000}:5000"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MLFLOW_TRACKING_URI=sqlite:////app/mlflow.db
+    volumes:
+      - ./mlflow.db:/app/mlflow.db
+      - ./models:/app/models
+      - mlflow-data:/mlflow
+    networks:
+      - mibici-net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:5000/health')"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "${MLFLOW_CPU_LIMIT:-1.0}"
+          memory: "${MLFLOW_MEMORY_LIMIT:-1G}"
+        reservations:
+          cpus: "0.20"
+          memory: "256M"
 
-  # TODO (Ari): Configurar microservicio de API de inferencia (FastAPI)
-  # - Configurar contexto de build apuntando a Containerfile
-  # - Configurar puertos expuestos (ej. 8000:8000) y variables de entorno (ej. MLFLOW_TRACKING_URI)
-  # - Establecer dependencia con MLflow (depends_on), healthcheck y límites de recursos
+  # ----------------------------------------------------------------------------
+  # Servicio 2: API de Inferencia FastAPI (Microservicio Modelo Champion)
+  # ----------------------------------------------------------------------------
   inference-api:
     build:
       context: .
       dockerfile: Containerfile
+    image: mibici-mlops-service:latest
     container_name: mibici-inference-api
+    restart: unless-stopped
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      - PORT=8000
+      - MLFLOW_TRACKING_URI=${MLFLOW_TRACKING_URI:-http://mlflow:5000}
+      - MODEL_ALIAS=${MODEL_ALIAS:-champion}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./models:/app/models:ro
+    networks:
+      - mibici-net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "${API_CPU_LIMIT:-1.0}"
+          memory: "${API_MEMORY_LIMIT:-1G}"
+        reservations:
+          cpus: "0.25"
+          memory: "256M"
 
-# TODO (Ari): Configurar red compartida (bridge) para comunicación DNS interna entre contenedores
-# networks:
-#   mibici-network:
-#     driver: bridge
+# ------------------------------------------------------------------------------
+# Red aislada tipo bridge para comunicación DNS interna entre microservicios
+# ------------------------------------------------------------------------------
+networks:
+  mibici-net:
+    name: mibici-net
+    driver: bridge
 
-# TODO (Ari): Configurar volúmenes persistentes para almacenamiento de MLflow y modelos
-# volumes:
-#   mlflow-data:
+# ------------------------------------------------------------------------------
+# Volúmenes persistentes para almacenamiento desacoplado del ciclo de vida
+# ------------------------------------------------------------------------------
+volumes:
+  mlflow-data:
+    name: mibici-mlflow-data
+  models-data:
+    name: mibici-models-data

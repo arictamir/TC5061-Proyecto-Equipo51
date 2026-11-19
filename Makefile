@@ -53,6 +53,26 @@ create_environment:
 
 
 
+## Build and launch microservices with Docker Compose
+.PHONY: compose-up
+compose-up:
+	docker compose up -d --build
+
+## Stop and tear down Docker Compose services
+.PHONY: compose-down
+compose-down:
+	docker compose down
+
+## View logs for Docker Compose microservices
+.PHONY: compose-logs
+compose-logs:
+	docker compose logs -f
+
+## Validate Docker Compose configuration
+.PHONY: compose-config
+compose-config:
+	docker compose config
+
 #################################################################################
 # PROJECT RULES                                                                 #
 #################################################################################
