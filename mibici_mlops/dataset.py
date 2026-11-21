@@ -137,9 +137,7 @@ def select_required_files(csv_urls: dict[str, str]) -> dict[str, str]:
                 f"{RAW_DATA_DIR / NOMENCLATURE_FILE}"
             )
         else:
-            raise ValueError(
-                f"Required files not found in MiBici portal: [{NOMENCLATURE_FILE}]"
-            )
+            raise ValueError(f"Required files not found in MiBici portal: [{NOMENCLATURE_FILE}]")
 
     logger.success(
         f"Validated {len(selected_urls)} required files "

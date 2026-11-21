@@ -1,5 +1,4 @@
-"""Aplicación principal de FastAPI para el servicio de inferencia de MiBici.
-"""
+"""Aplicación principal de FastAPI para el servicio de inferencia de MiBici."""
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager

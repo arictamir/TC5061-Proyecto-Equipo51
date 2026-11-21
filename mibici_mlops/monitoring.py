@@ -148,7 +148,9 @@ def parse_drift_metrics_dict(raw_dict: dict[str, Any]) -> dict[str, Any]:
             summary["drift_share"] = float(result.get("drift_share", 0.0))
             summary["number_of_columns"] = int(result.get("number_of_columns", 0))
             summary["number_of_drifted_columns"] = int(result.get("number_of_drifted_columns", 0))
-            summary["share_of_drifted_columns"] = float(result.get("share_of_drifted_columns", 0.0))
+            summary["share_of_drifted_columns"] = float(
+                result.get("share_of_drifted_columns", 0.0)
+            )
 
         elif metric_name == "DataDriftTable":
             drift_by_cols = result.get("drift_by_columns", {})
@@ -173,9 +175,7 @@ def parse_drift_metrics_dict(raw_dict: dict[str, Any]) -> dict[str, Any]:
                 "reference_nulls": int(
                     result.get("reference", {}).get("number_of_missing_values", 0)
                 ),
-                "current_nulls": int(
-                    result.get("current", {}).get("number_of_missing_values", 0)
-                ),
+                "current_nulls": int(result.get("current", {}).get("number_of_missing_values", 0)),
             }
 
     return summary
