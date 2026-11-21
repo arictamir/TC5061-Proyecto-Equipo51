@@ -150,6 +150,9 @@ jobs:
     name: Container Build & Compose Validation
     needs: [test-suite]
     runs-on: ubuntu-latest
+    env:
+      MLFLOW_DB_PATH: ./.ci/mlflow/mlflow.db
+      MLFLOW_ARTIFACTS_PATH: ./.ci/mlflow/mlartifacts
     steps:
       - name: Checkout del código fuente
         uses: actions/checkout@v4
@@ -176,10 +179,10 @@ jobs:
       - name: Validación de levantamiento y Smoke Test con Docker Compose
         run: |
           # Preparar los bind mounts temporales del runner Linux.
-          touch mlflow.db
-          chmod 666 mlflow.db
-          mkdir -p mlartifacts
-          chmod 777 mlartifacts
+          mkdir -p "$(dirname "$MLFLOW_DB_PATH")" "$MLFLOW_ARTIFACTS_PATH"
+          touch "$MLFLOW_DB_PATH"
+          chmod 777 "$(dirname "$MLFLOW_DB_PATH")" "$MLFLOW_ARTIFACTS_PATH"
+          chmod 666 "$MLFLOW_DB_PATH"
 
           # Levantar MLflow antes de registrar los modelos reales.
           docker compose up -d mlflow
