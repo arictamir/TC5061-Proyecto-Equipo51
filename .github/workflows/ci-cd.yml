@@ -62,6 +62,8 @@ jobs:
     name: Test Suite (Python ${{ matrix.python-version }})
     needs: [lint-and-security]
     runs-on: ubuntu-latest
+    env:
+      MLFLOW_TRACKING_URI: http://127.0.0.1:5050
     strategy:
       fail-fast: false
       matrix:
@@ -69,6 +71,8 @@ jobs:
     steps:
       - name: Checkout del código fuente
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Configurar Python ${{ matrix.python-version }} con caché
         uses: actions/setup-python@v5
@@ -91,9 +95,45 @@ jobs:
           pip install -r requirements.txt
           pip install -e .
 
+      - name: Iniciar MLflow efímero para pruebas
+        run: |
+          mkdir -p /tmp/mibici-ci-artifacts
+          mlflow server \
+            --host 127.0.0.1 \
+            --port 5050 \
+            --workers 1 \
+            --backend-store-uri sqlite:////tmp/mibici-ci.db \
+            --artifacts-destination /tmp/mibici-ci-artifacts \
+            > /tmp/mibici-mlflow.log 2>&1 &
+          echo $! > /tmp/mibici-mlflow.pid
+
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:5050/health; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail http://127.0.0.1:5050/health
+
+      - name: Registrar Champion y Challenger reales para CI
+        run: |
+          python scripts/bootstrap_ci_registry.py \
+            --tracking-uri "$MLFLOW_TRACKING_URI"
+
       - name: Ejecutar pruebas automatizadas con reporte de cobertura
         run: |
           pytest --cov=mibici_mlops --cov-report=xml:coverage.xml --cov-report=term-missing tests/
+
+      - name: Mostrar diagnóstico de MLflow si falla la suite
+        if: failure()
+        run: cat /tmp/mibici-mlflow.log
+
+      - name: Detener MLflow efímero
+        if: always()
+        run: |
+          if [ -f /tmp/mibici-mlflow.pid ]; then
+            kill "$(cat /tmp/mibici-mlflow.pid)" || true
+          fi
 
       - name: Subir reporte de cobertura como artefacto
         uses: actions/upload-artifact@v4
@@ -113,6 +153,8 @@ jobs:
     steps:
       - name: Checkout del código fuente
         uses: actions/checkout@v4
+        with:
+          lfs: true
 
       - name: Configurar Docker Buildx con soporte de caché
         uses: docker/setup-buildx-action@v3
@@ -133,18 +175,47 @@ jobs:
 
       - name: Validación de levantamiento y Smoke Test con Docker Compose
         run: |
-          # Levantar los servicios en segundo plano usando la imagen construida
-          docker compose up -d
+          # Preparar los bind mounts temporales del runner Linux.
+          touch mlflow.db
+          chmod 666 mlflow.db
+          mkdir -p mlartifacts
+          chmod 777 mlartifacts
 
-          # Esperar a que los healthchecks alcancen estado saludable
-          echo "Esperando que los servicios alcancen estado saludable..."
-          for i in {1..30}; do
-            if docker compose ps | grep -q "healthy"; then
-              echo "Servicios saludables detectados."
+          # Levantar MLflow antes de registrar los modelos reales.
+          docker compose up -d mlflow
+          for i in {1..60}; do
+            MLFLOW_HEALTH="$(docker inspect \
+              --format='{{.State.Health.Status}}' mibici-mlflow 2>/dev/null || true)"
+            if [ "$MLFLOW_HEALTH" = "healthy" ]; then
               break
             fi
             sleep 2
           done
+          test "$(docker inspect --format='{{.State.Health.Status}}' \
+            mibici-mlflow)" = "healthy"
+
+          # Construir el Registry efímero usando Champion y Challenger reales.
+          docker run --rm \
+            --network mibici-net \
+            -v "${{ github.workspace }}/models:/app/models:ro" \
+            -v "${{ github.workspace }}/scripts:/app/scripts:ro" \
+            mibici-mlops-service:latest \
+            python /app/scripts/bootstrap_ci_registry.py \
+            --tracking-uri http://mlflow:5000
+
+          # Iniciar la API después de que @champion esté disponible.
+          docker compose up -d inference-api
+          for i in {1..60}; do
+            API_HEALTH="$(docker inspect \
+              --format='{{.State.Health.Status}}' mibici-inference-api \
+              2>/dev/null || true)"
+            if [ "$API_HEALTH" = "healthy" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$(docker inspect --format='{{.State.Health.Status}}' \
+            mibici-inference-api)" = "healthy"
 
           docker compose ps
 
@@ -152,12 +223,18 @@ jobs:
           curl --fail --retry 5 --retry-delay 2 http://localhost:5000/health || exit 1
 
           # Probar endpoint de salud de FastAPI
-          curl --fail --retry 5 --retry-delay 2 http://localhost:8000/health || exit 1
+          API_RESPONSE="$(curl --fail --retry 5 --retry-delay 2 \
+            http://localhost:8000/health)"
+          echo "$API_RESPONSE"
+          echo "$API_RESPONSE" | grep -q '"status":"ok"'
+          echo "$API_RESPONSE" | grep -q '"model_loaded":true'
 
           # Smoke test: Probar endpoint de inferencia POST /predict
-          curl --fail -X POST http://localhost:8000/predict \
+          PREDICTION="$(curl --fail -X POST http://localhost:8000/predict \
             -H "Content-Type: application/json" \
-            -d '{"station_id": "2", "hour_of_day": 8, "day_of_week": 1, "is_weekend": 0, "month": 5, "lag_1": 4.0, "lag_24": 5.0, "lag_168": 6.0, "rolling_mean_3h": 4.5, "rolling_mean_24h": 5.2, "history_hours": 120}' || exit 1
+            -d '{"station_id": "2", "hour_of_day": 8, "day_of_week": 1, "is_weekend": 0, "month": 5, "lag_1": 4.0, "lag_24": 5.0, "lag_168": 6.0, "rolling_mean_3h": 4.5, "rolling_mean_24h": 5.2, "history_hours": 120}')"
+          echo "$PREDICTION"
+          echo "$PREDICTION" | grep -q '"predicted_demand"'
 
           echo "Smoke test completado exitosamente."
 

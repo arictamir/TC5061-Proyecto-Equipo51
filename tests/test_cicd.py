@@ -114,3 +114,30 @@ def test_github_workflow_docker_and_compose_validation() -> None:
     assert "/health" in steps_text, "Debe validar la salud de los servicios levantados"
     assert "/predict" in steps_text, "Debe ejecutar un smoke test al endpoint de inferencia"
     assert "docker compose down" in steps_text, "Debe realizar un desmontaje limpio al finalizar"
+
+
+def test_github_workflow_bootstraps_real_model_registry() -> None:
+    """Valida que CI prepare el Registry real antes de pruebas e inferencia."""
+    workflow = _load_workflow()
+    test_job = workflow["jobs"]["test-suite"]
+    docker_job = workflow["jobs"]["docker-build-and-validate"]
+
+    test_steps = " ".join(
+        step.get("run", "") for step in test_job.get("steps", []) if "run" in step
+    )
+    docker_steps = " ".join(
+        step.get("run", "") for step in docker_job.get("steps", []) if "run" in step
+    )
+
+    assert "bootstrap_ci_registry.py" in test_steps
+    assert "bootstrap_ci_registry.py" in docker_steps
+    assert '"model_loaded":true' in docker_steps
+
+    for job in (test_job, docker_job):
+        checkout_steps = [
+            step
+            for step in job.get("steps", [])
+            if step.get("uses", "").startswith("actions/checkout@")
+        ]
+        assert checkout_steps
+        assert checkout_steps[0].get("with", {}).get("lfs") is True
