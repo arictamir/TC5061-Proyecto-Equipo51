@@ -319,8 +319,7 @@ def train_and_register_challenger(
             )
         except Exception as exc:
             raise RuntimeError(
-                "No se pudo verificar el registro del nuevo Challenger "
-                f"con run_id={run_id}."
+                f"No se pudo verificar el registro del nuevo Challenger con run_id={run_id}."
             ) from exc
 
     return {

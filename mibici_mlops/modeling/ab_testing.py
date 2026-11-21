@@ -171,11 +171,17 @@ def compute_statistical_test(
 
     if is_significant:
         if mean_diff > 0:
-            conclusion = "Challenger presenta un error significativamente menor que Champion (p < 0.05)."
+            conclusion = (
+                "Challenger presenta un error significativamente menor que Champion (p < 0.05)."
+            )
         else:
-            conclusion = "Champion presenta un error significativamente menor que Challenger (p < 0.05)."
+            conclusion = (
+                "Champion presenta un error significativamente menor que Challenger (p < 0.05)."
+            )
     else:
-        conclusion = "No existe diferencia estadísticamente significativa entre ambos modelos (p >= 0.05)."
+        conclusion = (
+            "No existe diferencia estadísticamente significativa entre ambos modelos (p >= 0.05)."
+        )
 
     return {
         "paired_t_statistic": round(float(t_stat), 4),
@@ -211,8 +217,12 @@ def generate_ab_testing_plots(
     x = np.arange(len(labels))
     width = 0.35
 
-    rects1 = ax.bar(x - width / 2, champ_vals, width, label="Champion (@champion)", color="#2b5c8f")
-    rects2 = ax.bar(x + width / 2, chall_vals, width, label="Challenger (@challenger)", color="#d95f02")
+    rects1 = ax.bar(
+        x - width / 2, champ_vals, width, label="Champion (@champion)", color="#2b5c8f"
+    )
+    rects2 = ax.bar(
+        x + width / 2, chall_vals, width, label="Challenger (@challenger)", color="#d95f02"
+    )
 
     ax.set_ylabel("Error de Predicción")
     ax.set_title("A/B Testing: Comparación de Métricas de Error sobre el Periodo Actual")
@@ -287,9 +297,7 @@ def generate_ab_testing_plots(
     df_eval_copy["chall_abs_err"] = np.abs(y_true - chall_preds)
 
     hourly_err = (
-        df_eval_copy.groupby("hour_num")[["champ_abs_err", "chall_abs_err"]]
-        .mean()
-        .reset_index()
+        df_eval_copy.groupby("hour_num")[["champ_abs_err", "chall_abs_err"]].mean().reset_index()
     )
 
     ax.plot(
@@ -401,7 +409,10 @@ def execute_ab_testing(
     mae_diff = metrics_chall["mae"] - metrics_champ["mae"]
     mae_pos_diff = metrics_chall["mae_positive"] - metrics_champ["mae_positive"]
 
-    if metrics_champ["rmse"] <= metrics_chall["rmse"] and metrics_champ["mae"] <= metrics_chall["mae"]:
+    if (
+        metrics_champ["rmse"] <= metrics_chall["rmse"]
+        and metrics_champ["mae"] <= metrics_chall["mae"]
+    ):
         recommended_winner = "champion"
         decision_summary = (
             f"Se recomienda mantener la Versión {champ_version} (@champion) como versión productiva vigente. "
@@ -441,7 +452,9 @@ def execute_ab_testing(
         "statistical_test": stat_test,
         "decision": {
             "recommended_active_version": recommended_winner,
-            "active_version_number": champ_version if recommended_winner == "champion" else chall_version,
+            "active_version_number": champ_version
+            if recommended_winner == "champion"
+            else chall_version,
             "decision_justification": decision_summary,
         },
         "continuous_training_recommendation": {
@@ -449,10 +462,7 @@ def execute_ab_testing(
             "recommended_cadence": "Reentrenamiento mensual automatizado con ventana deslizante de 12 a 24 meses.",
             "validation_gate": "La nueva versión reentrenada solo debe sustituir a @champion si supera el test de A/B testing con p < 0.05 y menor RMSE en datos de holdout.",
         },
-        "figures": [
-            p.relative_to(FIGURES_DIR.parent).as_posix()
-            for p in plots
-        ],
+        "figures": [p.relative_to(FIGURES_DIR.parent).as_posix() for p in plots],
     }
 
     # Guardar resumen JSON
@@ -495,23 +505,31 @@ def run_ab_test_cli(
     typer.echo(f"  - MAE Global:          {c_info['metrics']['mae']:.4f}")
     typer.echo(f"  - MAE (Demanda > 0):   {c_info['metrics']['mae_positive']:.4f}")
     typer.echo(f"  - R²:                  {c_info['metrics']['r2']:.4f}")
-    typer.echo(f"  - Latencia:            {c_info['metrics']['latency_ms_per_1k']:.2f} ms/1k preds\n")
+    typer.echo(
+        f"  - Latencia:            {c_info['metrics']['latency_ms_per_1k']:.2f} ms/1k preds\n"
+    )
 
     typer.echo(f"Challenger (@challenger) -> Versión {ch_info['version']}")
     typer.echo(f"  - RMSE:                {ch_info['metrics']['rmse']:.4f}")
     typer.echo(f"  - MAE Global:          {ch_info['metrics']['mae']:.4f}")
     typer.echo(f"  - MAE (Demanda > 0):   {ch_info['metrics']['mae_positive']:.4f}")
     typer.echo(f"  - R²:                  {ch_info['metrics']['r2']:.4f}")
-    typer.echo(f"  - Latencia:            {ch_info['metrics']['latency_ms_per_1k']:.2f} ms/1k preds\n")
+    typer.echo(
+        f"  - Latencia:            {ch_info['metrics']['latency_ms_per_1k']:.2f} ms/1k preds\n"
+    )
 
     stat = results["statistical_test"]
     typer.echo("Prueba de Significancia Estadística (Paired t-test):")
     typer.echo(f"  - t-statistic:         {stat['paired_t_statistic']:.4f}")
     typer.echo(f"  - p-value:             {stat['p_value']:.4e}")
-    typer.echo(f"  - Significativo (p<.05): {'SÍ' if stat['is_statistically_significant'] else 'NO'}\n")
+    typer.echo(
+        f"  - Significativo (p<.05): {'SÍ' if stat['is_statistically_significant'] else 'NO'}\n"
+    )
 
     typer.echo("Decisión y Recomendación:")
-    typer.echo(f"  - Versión Vigente:     Versión {dec['active_version_number']} ({dec['recommended_active_version'].upper()})")
+    typer.echo(
+        f"  - Versión Vigente:     Versión {dec['active_version_number']} ({dec['recommended_active_version'].upper()})"
+    )
     typer.echo(f"  - Justificación:       {dec['decision_justification']}")
     typer.echo("=" * 65 + "\n")
 
@@ -525,7 +543,9 @@ def show_ab_summary_cli(
 ) -> None:
     """Muestra el resumen del último ejercicio de A/B testing realizado."""
     if not json_path.exists():
-        typer.echo(f"No existe el archivo de resultados en: {json_path}. Ejecuta 'run-ab-test' primero.")
+        typer.echo(
+            f"No existe el archivo de resultados en: {json_path}. Ejecuta 'run-ab-test' primero."
+        )
         raise typer.Exit(code=1)
 
     with open(json_path, encoding="utf-8") as f:
@@ -535,8 +555,12 @@ def show_ab_summary_cli(
     typer.echo(f"Periodo: {data.get('evaluation_period')}")
     c = data.get("champion_info", {})
     ch = data.get("challenger_info", {})
-    typer.echo(f"Champion (v{c.get('version')}):   RMSE={c.get('metrics', {}).get('rmse')} | MAE={c.get('metrics', {}).get('mae')}")
-    typer.echo(f"Challenger (v{ch.get('version')}): RMSE={ch.get('metrics', {}).get('rmse')} | MAE={ch.get('metrics', {}).get('mae')}")
+    typer.echo(
+        f"Champion (v{c.get('version')}):   RMSE={c.get('metrics', {}).get('rmse')} | MAE={c.get('metrics', {}).get('mae')}"
+    )
+    typer.echo(
+        f"Challenger (v{ch.get('version')}): RMSE={ch.get('metrics', {}).get('rmse')} | MAE={ch.get('metrics', {}).get('mae')}"
+    )
     dec = data.get("decision", {})
     typer.echo(f"\nVersión Ganadora Recomendada: Versión {dec.get('active_version_number')}")
     typer.echo(f"Justificación: {dec.get('decision_justification')}")

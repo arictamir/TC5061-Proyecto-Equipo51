@@ -1,0 +1,40 @@
+artifact_path: mlflow-artifacts:/1/models/m-7223e377646448558f2b38635f27a8d2/artifacts
+flavors:
+  catboost:
+    catboost_version: 1.2.10
+    code: null
+    data: model.cb
+    model_type: CatBoostRegressor
+    save_format: cbm
+  python_function:
+    data: model.cb
+    env:
+      conda: conda.yaml
+      virtualenv: python_env.yaml
+    loader_module: mlflow.catboost
+    python_version: 3.10.11
+is_signature_from_type_hint: false
+mlflow_version: 3.16.1
+model_id: m-7223e377646448558f2b38635f27a8d2
+model_size_bytes: 10050102
+model_uuid: m-7223e377646448558f2b38635f27a8d2
+prompts: null
+run_id: a850a3f9bdab4e76ad33215f8f459340
+saved_input_example_info:
+  artifact_path: input_example.json
+  pandas_orient: split
+  serving_input_path: serving_input_example.json
+  type: dataframe
+signature:
+  inputs: '[{"type": "string", "name": "station_id", "required": true}, {"type": "string",
+    "name": "hour_of_day", "required": true}, {"type": "string", "name": "day_of_week",
+    "required": true}, {"type": "integer", "name": "is_weekend", "required": true},
+    {"type": "string", "name": "month", "required": true}, {"type": "double", "name":
+    "lag_1", "required": true}, {"type": "double", "name": "lag_24", "required": true},
+    {"type": "double", "name": "lag_168", "required": true}, {"type": "double", "name":
+    "rolling_mean_3h", "required": true}, {"type": "double", "name": "rolling_mean_24h",
+    "required": true}, {"type": "long", "name": "history_hours", "required": true}]'
+  outputs: '[{"type": "tensor", "tensor-spec": {"dtype": "float64", "shape": [-1]}}]'
+  params: null
+type_hint_from_example: false
+utc_time_created: '2026-11-13 05:32:26.067018'
