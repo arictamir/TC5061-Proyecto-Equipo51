@@ -1,0 +1,31 @@
+# ==============================================================================
+# GitHub Actions: Pipeline Automatizado de CI/CD para MiBici MLOps
+# Entregable: Microservicios, CI/CD y FinOps
+# Responsable: Ingrid
+# ==============================================================================
+
+name: CI/CD Pipeline - MiBici MLOps
+
+"on":
+  push:
+    branches:
+      - main
+      - develop
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  # TODO (Ingrid): Diseñar e implementar los jobs del pipeline automatizado:
+  # 1. Job de verificación estática de código y seguridad (linters como ruff y análisis AST con bandit)
+  # 2. Job de pruebas unitarias/integración con pytest, matriz de Python, reporte de cobertura y caché de dependencias pip
+  # 3. Job de construcción de imagen OCI (Docker build) y validación de levantamiento/salud con Docker Compose
+  pipeline-setup:
+    name: Pipeline Setup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v4
+      - name: Placeholder
+        run: echo "Pipeline en configuracion por Ingrid"
