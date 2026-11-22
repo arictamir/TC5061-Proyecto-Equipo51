@@ -122,7 +122,7 @@ jobs:
 
       - name: Ejecutar pruebas automatizadas con reporte de cobertura
         run: |
-          pytest --cov=mibici_mlops --cov-report=xml:coverage.xml --cov-report=term-missing tests/
+          pytest -p no:locust --cov=mibici_mlops --cov-report=xml:coverage.xml --cov-report=term-missing tests/
 
       - name: Mostrar diagnóstico de MLflow si falla la suite
         if: failure()
