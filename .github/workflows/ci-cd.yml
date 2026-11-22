@@ -153,6 +153,7 @@ jobs:
     env:
       MLFLOW_DB_PATH: ./.ci/mlflow/mlflow.db
       MLFLOW_ARTIFACTS_PATH: ./.ci/mlflow/mlartifacts
+      MLFLOW_MEMORY_LIMIT: 2G
     steps:
       - name: Checkout del código fuente
         uses: actions/checkout@v7
