@@ -120,7 +120,10 @@ class ModelService:
         - lag_1, lag_24, lag_168, rolling_mean_3h, rolling_mean_24h -> float64
         """
         if isinstance(payload, (list, tuple)):
-            records = [item.model_dump() if hasattr(item, "model_dump") else dict(item) for item in payload]
+            records = [
+                item.model_dump() if hasattr(item, "model_dump") else dict(item)
+                for item in payload
+            ]
         elif hasattr(payload, "model_dump"):
             records = [payload.model_dump()]
         elif isinstance(payload, dict):

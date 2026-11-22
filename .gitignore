@@ -220,6 +220,10 @@ mlflow.db-wal
 # Modelos serializados
 models/*
 !models/.gitkeep
+!models/p1_champion/
+!models/p1_champion/**
+!models/p1_challenger/
+!models/p1_challenger/**
 
 # Serialized models
 *.cbm
