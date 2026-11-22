@@ -241,6 +241,20 @@ jobs:
 
           echo "Smoke test completado exitosamente."
 
+      - name: Diagnosticar contenedores si falla el Smoke Test
+        if: failure()
+        run: |
+          echo "=== Estado de los contenedores ==="
+          docker compose ps -a
+
+          echo "=== Estado de MLflow ==="
+          docker inspect mibici-mlflow \
+            --format='Estado={{.State.Status}} Reinicios={{.RestartCount}} OOMKilled={{.State.OOMKilled}}' \
+            || true
+
+          echo "=== Últimos registros de MLflow ==="
+          docker compose logs --tail=100 mlflow || true
+
       - name: Desmontaje limpio de servicios Compose
         if: always()
         run: |
