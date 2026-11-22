@@ -142,9 +142,7 @@ def calculate_cost_per_inference_from_throughput(
     if not (0 < system_utilization_ratio <= 1.0):
         raise ValueError("El ratio de utilización debe estar en el rango (0, 1].")
 
-    effective_inferences_per_hour = (
-        inferences_per_second * 3600.0 * system_utilization_ratio
-    )
+    effective_inferences_per_hour = inferences_per_second * 3600.0 * system_utilization_ratio
     return hourly_rate_usd / effective_inferences_per_hour
 
 
@@ -226,13 +224,9 @@ def compare_cloud_providers_from_throughput(
         record = asdict(instance)
         record.update(
             {
-                "monthly_cost_usd": round(
-                    instance.hourly_rate_usd * hours_per_month, 2
-                ),
+                "monthly_cost_usd": round(instance.hourly_rate_usd * hours_per_month, 2),
                 "cost_per_inference_usd": unit_cost,
-                "cost_per_million_usd": calculate_cost_per_million_requests(
-                    unit_cost
-                ),
+                "cost_per_million_usd": calculate_cost_per_million_requests(unit_cost),
             }
         )
         results.append(record)
@@ -246,31 +240,30 @@ def simulate_finops_optimizations(
     system_utilization_ratio: float = 0.70,
     annual_requests: float = 50_000_000.0,
 ) -> dict[str, Any]:
-    
     """Simula escenarios hipotéticos de optimización FinOps.
 
-        Estrategias evaluadas:
-        1. Batching dinámico: aumento hipotético del throughput.
-        2. Rightsizing: reducción hipotética de la tarifa de cómputo.
-        3. Caché: reducción de inferencias procesadas.
-        4. Estrategia integral: combinación de optimizaciones y descuentos.
+    Estrategias evaluadas:
+    1. Batching dinámico: aumento hipotético del throughput.
+    2. Rightsizing: reducción hipotética de la tarifa de cómputo.
+    3. Caché: reducción de inferencias procesadas.
+    4. Estrategia integral: combinación de optimizaciones y descuentos.
 
-        Los factores de mejora son supuestos ilustrativos y no
-        representan resultados validados mediante pruebas de carga.
+    Los factores de mejora son supuestos ilustrativos y no
+    representan resultados validados mediante pruebas de carga.
 
-        El modelo estima costos de cómputo proporcionales al volumen
-        procesado. No representa el costo total anual de infraestructura
-        ni incluye almacenamiento, red o servicios auxiliares.
+    El modelo estima costos de cómputo proporcionales al volumen
+    procesado. No representa el costo total anual de infraestructura
+    ni incluye almacenamiento, red o servicios auxiliares.
 
-        Args:
-            baseline_hourly_rate: Tarifa horaria de referencia en USD.
-            baseline_rps: Throughput hipotético en solicitudes por segundo.
-            system_utilization_ratio: Factor supuesto de utilización.
-            annual_requests: Volumen anual hipotético de solicitudes.
+    Args:
+        baseline_hourly_rate: Tarifa horaria de referencia en USD.
+        baseline_rps: Throughput hipotético en solicitudes por segundo.
+        system_utilization_ratio: Factor supuesto de utilización.
+        annual_requests: Volumen anual hipotético de solicitudes.
 
-        Returns:
-            Diccionario con costos simulados, ahorro estimado y
-            porcentaje de reducción bajo los supuestos definidos.
+    Returns:
+        Diccionario con costos simulados, ahorro estimado y
+        porcentaje de reducción bajo los supuestos definidos.
     """
 
     base_unit_cost = calculate_cost_per_inference(
@@ -309,12 +302,16 @@ def simulate_finops_optimizations(
 
     return {
         "baseline_annual_cost_usd": round(base_annual_cost, 2),
-        "baseline_cost_per_million_usd": round(calculate_cost_per_million_requests(base_unit_cost), 4),
+        "baseline_cost_per_million_usd": round(
+            calculate_cost_per_million_requests(base_unit_cost), 4
+        ),
         "batching_annual_cost_usd": round(batching_annual_cost, 2),
         "rightsized_annual_cost_usd": round(rightsized_annual_cost, 2),
         "caching_annual_cost_usd": round(caching_annual_cost, 2),
         "optimized_annual_cost_usd": round(combined_annual_cost, 2),
-        "optimized_cost_per_million_usd": round(calculate_cost_per_million_requests(combined_unit_cost * (1.0 - cache_hit_ratio)), 4),
+        "optimized_cost_per_million_usd": round(
+            calculate_cost_per_million_requests(combined_unit_cost * (1.0 - cache_hit_ratio)), 4
+        ),
         "annual_savings_usd": round(total_annual_savings, 2),
         "savings_percentage": round(savings_percentage, 2),
     }
