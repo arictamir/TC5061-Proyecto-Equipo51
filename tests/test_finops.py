@@ -1,8 +1,11 @@
 """Pruebas unitarias para el modelo de costos FinOps y escenarios de Locust.
 """
 
+import subprocess
+import sys
+
 import pytest
-from tests.load.locustfile import MiBiciLoadTestUser, generate_sample_prediction_payload
+from tests.load.payload_factory import generate_sample_prediction_payload
 
 from mibici_mlops.finops.cost_calculator import (
     CLOUD_PRICING_CATALOG,
@@ -152,11 +155,28 @@ def test_locust_payload_generator() -> None:
     assert payload["history_hours"] >= 24
 
 
+
 def test_locust_user_class_attributes() -> None:
-    """Valida la clase de usuario de Locust y sus tareas decoradas."""
-    user = MiBiciLoadTestUser
-    assert hasattr(user, "tasks")
-    assert len(user.tasks) >= 3
+    """Valida las tareas de Locust en un proceso independiente."""
+    script = """
+from tests.load.locustfile import MiBiciLoadTestUser
+
+user = MiBiciLoadTestUser
+assert hasattr(user, "tasks")
+assert len(user.tasks) >= 3
+"""
+
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+
+    assert result.returncode == 0, (
+        f"Falló la validación de Locust:\n{result.stdout}\n{result.stderr}"
+    )
 
 
 def test_estimate_inference_count() -> None:
