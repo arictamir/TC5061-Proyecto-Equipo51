@@ -1,13 +1,110 @@
 """Escenario de pruebas de carga con Locust para la API de inferencia de MiBici.
 
-Entregable: Microservicios, CI/CD y FinOps
-Responsable: Gaby
+Simula tráfico concurrente realista de usuarios y estaciones IoT de MiBici:
+1. Healthcheck / Keep-alive sintético (10% del tráfico total).
+2. Inferencia de demanda unitaria en tiempo real (75% del tráfico total).
+3. Inferencia de demanda en lote para sincronización de racks (15% del tráfico total).
 """
 
-# TODO (Gaby): Diseñar e implementar escenario de pruebas con Locust:
-# 1. Definir clase de usuario y tiempos de espera entre peticiones
-# 2. Configurar tareas con pesos diferenciados para endpoints del servicio:
-#    - Health check / monitoreo sintético
-#    - Inferencia unitaria (/predict) con datos de entrada representativos
-#    - Inferencia en lote (/predict/batch)
-# 3. Validar códigos de respuesta y tiempos de respuesta esperados
+import random
+from typing import Any
+
+from locust import HttpUser, between, task
+
+SAMPLE_STATIONS: list[str] = [
+    "2",
+    "3",
+    "5",
+    "8",
+    "15",
+    "24",
+    "32",
+    "50",
+    "78",
+    "100",
+    "150",
+    "200",
+    "310",
+    "420",
+]
+
+
+def generate_sample_prediction_payload() -> dict[str, Any]:
+    """Genera un payload válido representativo para el endpoint POST /predict."""
+    station_id = random.choice(SAMPLE_STATIONS)
+    hour = random.randint(0, 23)
+    day = random.randint(0, 6)
+    is_weekend = 1 if day in (5, 6) else 0
+    month = random.randint(1, 12)
+
+    lag_1 = round(random.uniform(0.0, 15.0), 2)
+    lag_24 = round(random.uniform(0.0, 20.0), 2)
+    lag_168 = round(random.uniform(0.0, 22.0), 2)
+    rolling_3h = round((lag_1 + random.uniform(0.0, 5.0)) / 2.0, 2)
+    rolling_24h = round((lag_24 + random.uniform(0.0, 8.0)) / 2.0, 2)
+    history_hours = random.randint(24, 720)
+
+    return {
+        "station_id": station_id,
+        "hour_of_day": hour,
+        "day_of_week": day,
+        "is_weekend": is_weekend,
+        "month": month,
+        "lag_1": lag_1,
+        "lag_24": lag_24,
+        "lag_168": lag_168,
+        "rolling_mean_3h": rolling_3h,
+        "rolling_mean_24h": rolling_24h,
+        "history_hours": history_hours,
+    }
+
+
+class MiBiciLoadTestUser(HttpUser):
+    """Usuario simulado que genera tráfico contra el microservicio de inferencia."""
+
+    wait_time = between(0.1, 0.5)
+
+    @task(1)
+    def check_health(self) -> None:
+        """Monitoreo sintético y verificación de salud del microservicio."""
+        with self.client.get("/health", catch_response=True) as response:
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("status") in ("ok", "degraded"):
+                    response.success()
+                else:
+                    response.failure(f"Estado de salud inesperado: {data}")
+            else:
+                response.failure(f"HTTP {response.status_code}: Fallo en healthcheck")
+
+    @task(8)
+    def predict_single_demand(self) -> None:
+        """Inferencia unitaria de demanda horaria para una estación."""
+        payload = generate_sample_prediction_payload()
+        headers = {"Content-Type": "application/json"}
+        with self.client.post("/predict", json=payload, headers=headers, catch_response=True) as response:
+            if response.status_code == 200:
+                data = response.json()
+                if "predicted_demand" in data and isinstance(data["predicted_demand"], (int, float)):
+                    response.success()
+                else:
+                    response.failure(f"Respuesta sin predicted_demand válido: {data}")
+            else:
+                response.failure(f"HTTP {response.status_code}: Error en /predict")
+
+    @task(2)
+    def predict_batch_demand(self) -> None:
+        """Inferencia por lotes (5 a 10 estaciones) para centros y hubs de distribución."""
+        batch_size = random.randint(5, 10)
+        observations = [generate_sample_prediction_payload() for _ in range(batch_size)]
+        payload = {"observations": observations}
+        headers = {"Content-Type": "application/json"}
+        with self.client.post("/predict/batch", json=payload, headers=headers, catch_response=True) as response:
+            if response.status_code == 200:
+                data = response.json()
+                if data.get("total_observations") == batch_size and "predictions" in data:
+                    response.success()
+                else:
+                    response.failure(f"Respuesta de batch inconsistente: {data}")
+            else:
+                response.failure(f"HTTP {response.status_code}: Error en /predict/batch")
