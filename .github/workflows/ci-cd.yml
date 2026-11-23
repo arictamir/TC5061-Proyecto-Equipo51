@@ -1,7 +1,6 @@
 # ==============================================================================
 # GitHub Actions: Pipeline Automatizado de CI/CD para MiBici MLOps
-# Entregable: Microservicios, CI/CD y FinOps
-# Responsable: Ingrid
+# Automatización de Pruebas, Linters, Construcción OCI y Validación de Compose
 # ==============================================================================
 
 name: CI/CD Pipeline - MiBici MLOps
@@ -11,21 +10,238 @@ name: CI/CD Pipeline - MiBici MLOps
     branches:
       - main
       - develop
+      - "feat/**"
   pull_request:
     branches:
       - main
       - develop
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: "mibici-inference-api"
+  PYTHON_DEFAULT: "3.10"
 
 jobs:
-  # TODO (Ingrid): Diseñar e implementar los jobs del pipeline automatizado:
-  # 1. Job de verificación estática de código y seguridad (linters como ruff y análisis AST con bandit)
-  # 2. Job de pruebas unitarias/integración con pytest, matriz de Python, reporte de cobertura y caché de dependencias pip
-  # 3. Job de construcción de imagen OCI (Docker build) y validación de levantamiento/salud con Docker Compose
-  pipeline-setup:
-    name: Pipeline Setup
+  # ----------------------------------------------------------------------------
+  # Job 1: Verificación Estática de Código y Seguridad
+  # ----------------------------------------------------------------------------
+  lint-and-security:
+    name: Lint & Security Analysis
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout del repositorio
-        uses: actions/checkout@v4
-      - name: Placeholder
-        run: echo "Pipeline en configuracion por Ingrid"
+      - name: Checkout del código fuente
+        uses: actions/checkout@v7
+
+      - name: Configurar entorno Python ${{ env.PYTHON_DEFAULT }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ env.PYTHON_DEFAULT }}
+          cache: "pip"
+
+      - name: Instalar herramientas de linters y seguridad
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "ruff==0.17.1" "bandit==1.9.4"
+
+      - name: Ejecutar verificación de estilo y formato con Ruff
+        run: |
+          ruff check .
+          ruff format --check .
+
+      - name: Ejecutar análisis de seguridad estática AST con Bandit
+        run: |
+          bandit -r mibici_mlops -ll
+
+  # ----------------------------------------------------------------------------
+  # Job 2: Suite Completa de Pruebas Automatizadas con Matriz y Caché
+  # ----------------------------------------------------------------------------
+  test-suite:
+    name: Test Suite (Python ${{ matrix.python-version }})
+    needs: [lint-and-security]
+    runs-on: ubuntu-latest
+    env:
+      MLFLOW_TRACKING_URI: http://127.0.0.1:5050
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10"]
+    steps:
+      - name: Checkout del código fuente
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Configurar Python ${{ matrix.python-version }} con caché
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: Cache de dependencias pip avanzado
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ matrix.python-version }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-${{ matrix.python-version }}-
+            ${{ runner.os }}-pip-
+
+      - name: Instalar dependencias del proyecto
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      - name: Iniciar MLflow efímero para pruebas
+        run: |
+          mkdir -p /tmp/mibici-ci-artifacts
+          mlflow server \
+            --host 127.0.0.1 \
+            --port 5050 \
+            --workers 1 \
+            --backend-store-uri sqlite:////tmp/mibici-ci.db \
+            --artifacts-destination /tmp/mibici-ci-artifacts \
+            > /tmp/mibici-mlflow.log 2>&1 &
+          echo $! > /tmp/mibici-mlflow.pid
+
+          for i in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:5050/health; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail http://127.0.0.1:5050/health
+
+      - name: Registrar Champion y Challenger reales para CI
+        run: |
+          python scripts/bootstrap_ci_registry.py \
+            --tracking-uri "$MLFLOW_TRACKING_URI"
+
+      - name: Ejecutar pruebas automatizadas con reporte de cobertura
+        run: |
+          pytest --cov=mibici_mlops --cov-report=xml:coverage.xml --cov-report=term-missing tests/
+
+      - name: Mostrar diagnóstico de MLflow si falla la suite
+        if: failure()
+        run: cat /tmp/mibici-mlflow.log
+
+      - name: Detener MLflow efímero
+        if: always()
+        run: |
+          if [ -f /tmp/mibici-mlflow.pid ]; then
+            kill "$(cat /tmp/mibici-mlflow.pid)" || true
+          fi
+
+      - name: Subir reporte de cobertura como artefacto
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-report-py${{ matrix.python-version }}
+          path: coverage.xml
+          retention-days: 7
+
+  # ----------------------------------------------------------------------------
+  # Job 3: Construcción de Contenedor y Validación de Docker Compose
+  # ----------------------------------------------------------------------------
+  docker-build-and-validate:
+    name: Container Build & Compose Validation
+    needs: [test-suite]
+    runs-on: ubuntu-latest
+    env:
+      MLFLOW_DB_PATH: ./.ci/mlflow/mlflow.db
+      MLFLOW_ARTIFACTS_PATH: ./.ci/mlflow/mlartifacts
+    steps:
+      - name: Checkout del código fuente
+        uses: actions/checkout@v7
+        with:
+          lfs: true
+
+      - name: Configurar Docker Buildx con soporte de caché
+        uses: docker/setup-buildx-action@v4
+
+      - name: Validar sintaxis y configuración de Docker Compose
+        run: |
+          docker compose config
+
+      - name: Construir imagen de contenedor OCI desde Containerfile
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Containerfile
+          load: true
+          tags: ${{ env.IMAGE_NAME }}:${{ github.sha }},mibici-mlops-service:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Validación de levantamiento y Smoke Test con Docker Compose
+        run: |
+          # Preparar los bind mounts temporales del runner Linux.
+          mkdir -p "$(dirname "$MLFLOW_DB_PATH")" "$MLFLOW_ARTIFACTS_PATH"
+          touch "$MLFLOW_DB_PATH"
+          chmod 777 "$(dirname "$MLFLOW_DB_PATH")" "$MLFLOW_ARTIFACTS_PATH"
+          chmod 666 "$MLFLOW_DB_PATH"
+
+          # Levantar MLflow antes de registrar los modelos reales.
+          docker compose up -d mlflow
+          for i in {1..60}; do
+            MLFLOW_HEALTH="$(docker inspect \
+              --format='{{.State.Health.Status}}' mibici-mlflow 2>/dev/null || true)"
+            if [ "$MLFLOW_HEALTH" = "healthy" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$(docker inspect --format='{{.State.Health.Status}}' \
+            mibici-mlflow)" = "healthy"
+
+          # Construir el Registry efímero usando Champion y Challenger reales.
+          docker run --rm \
+            --network mibici-net \
+            -v "${{ github.workspace }}/models:/app/models:ro" \
+            -v "${{ github.workspace }}/scripts:/app/scripts:ro" \
+            mibici-mlops-service:latest \
+            python /app/scripts/bootstrap_ci_registry.py \
+            --tracking-uri http://mlflow:5000
+
+          # Iniciar la API después de que @champion esté disponible.
+          docker compose up -d inference-api
+          for i in {1..60}; do
+            API_HEALTH="$(docker inspect \
+              --format='{{.State.Health.Status}}' mibici-inference-api \
+              2>/dev/null || true)"
+            if [ "$API_HEALTH" = "healthy" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test "$(docker inspect --format='{{.State.Health.Status}}' \
+            mibici-inference-api)" = "healthy"
+
+          docker compose ps
+
+          # Probar endpoint de salud de MLflow
+          curl --fail --retry 5 --retry-delay 2 http://localhost:5000/health || exit 1
+
+          # Probar endpoint de salud de FastAPI
+          API_RESPONSE="$(curl --fail --retry 5 --retry-delay 2 \
+            http://localhost:8000/health)"
+          echo "$API_RESPONSE"
+          echo "$API_RESPONSE" | grep -q '"status":"ok"'
+          echo "$API_RESPONSE" | grep -q '"model_loaded":true'
+
+          # Smoke test: Probar endpoint de inferencia POST /predict
+          PREDICTION="$(curl --fail -X POST http://localhost:8000/predict \
+            -H "Content-Type: application/json" \
+            -d '{"station_id": "2", "hour_of_day": 8, "day_of_week": 1, "is_weekend": 0, "month": 5, "lag_1": 4.0, "lag_24": 5.0, "lag_168": 6.0, "rolling_mean_3h": 4.5, "rolling_mean_24h": 5.2, "history_hours": 120}')"
+          echo "$PREDICTION"
+          echo "$PREDICTION" | grep -q '"predicted_demand"'
+
+          echo "Smoke test completado exitosamente."
+
+      - name: Desmontaje limpio de servicios Compose
+        if: always()
+        run: |
+          docker compose down -v

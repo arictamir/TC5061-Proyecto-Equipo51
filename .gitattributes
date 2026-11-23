@@ -1,0 +1,2 @@
+models/p1_champion/model.cb filter=lfs diff=lfs merge=lfs -text
+models/p1_challenger/model.cb filter=lfs diff=lfs merge=lfs -text

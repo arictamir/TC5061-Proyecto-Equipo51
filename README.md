@@ -939,12 +939,142 @@ Se establece la siguiente política operativa para gobernar el ciclo de vida del
 - **Disparador por Desempeño:** Reentrenar si el MAE en viajes activos supera 1.40 viajes/hora durante 7 días continuos en las peticiones registradas por la API.
 - **Compuerta de Calidad (Quality Gate):** Ningún modelo reentrenado sustituirá a `@champion` sin superar una prueba t pareada ($p < 0.05$) con menor RMSE global en el conjunto de holdout más reciente.
 
-## 13. Organización del repositorio
+## 13. Microservicios, CI/CD y FinOps
+
+En esta entrega el equipo consolidó el proyecto MiBici como un sistema operable, resiliente y económicamente viable:
+1. **Orquestación Multi-Servicio:** Despliegue conjunto de la API de inferencia FastAPI y el servidor de seguimiento MLflow mediante Docker Compose.
+2. **Automatización CI/CD:** Pipeline en GitHub Actions que ejecuta pruebas, linters, análisis de seguridad y validación de levantamiento en contenedores.
+3. **Pruebas de Carga con Locust:** Simulación de tráfico concurrente realista ponderado y evaluación de latencias bajo SLAs corporativos.
+4. **Monitoreo de Recursos:** Medición de telemetría en tiempo real (`docker stats`) para CPU y memoria.
+5. **Análisis FinOps:** Estimación del costo por inferencia en la nube y modelado de optimizaciones con un ahorro proyectado del 68.4%.
+
+El reporte analítico exhaustivo se encuentra disponible en [`reports/finops/finops_load_report.md`](reports/finops/finops_load_report.md).
+
+### 13.1 Orquestación con Docker Compose
+
+El archivo [`docker-compose.yml`](docker-compose.yml) configura y levanta todos los servicios requeridos con un solo comando:
+
+```powershell
+# Construir y levantar los microservicios en segundo plano
+docker compose up -d --build
+# o utilizando el Makefile:
+make compose-up
+```
+
+#### Servicios Integrados y Configuraciones Avanzadas:
+- **`mlflow` (Tracking Server y Model Registry):**
+  - Expuesto en el puerto `5000:5000`.
+  - Persistencia desacoplada con backend store SQLite (`/app/mlflow.db`) y directorio de modelos (`/app/models`).
+  - Healthcheck nativo consultando `GET http://localhost:5000/health` cada 15 segundos.
+- **`inference-api` (Microservicio REST FastAPI):**
+  - Expuesto en el puerto `8000:8000`.
+  - Dependencia de inicialización: `depends_on: mlflow` con `condition: service_healthy`, garantizando que la API solo inicie cuando MLflow esté completamente operativo.
+  - Conexión interna a MLflow a través de la URI `http://mlflow:5000`.
+  - Healthcheck nativo consultando `GET http://localhost:8000/health`.
+- **Red Aislada (`mibici-net`):** Red interna tipo `bridge` que proporciona resolución DNS automática entre contenedores sin exponer puertos innecesarios a la red del host.
+- **Límites de Recursos (FinOps Ready):** Especificación de `deploy.resources` con límite de 1.0 CPU y 1024 MB de RAM para evitar saturación del nodo anfitrión.
+- **Plantilla de Variables:** Configuración parametrizada documentada en [`.env.example`](.env.example).
+
+### 13.2 Pipeline de CI/CD con GitHub Actions
+
+El flujo automatizado en [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) se activa ante eventos `push` y `pull_request` en ramas principales y de características (`main`, `develop`, `feat/**`), estructurado en tres jobs secuenciales:
+
+```
+[ Push / PR ] ──> [ Job 1: lint-and-security ] ──> [ Job 2: test-suite ] ──> [ Job 3: docker-build-and-validate ]
+```
+
+1. **`lint-and-security`:**
+   - Verificación de formato y reglas de estilo con `ruff check .` y `ruff format --check .`.
+   - Escaneo estático de vulnerabilidades AST con `bandit -r mibici_mlops -ll`.
+2. **`test-suite`:**
+   - Matriz de pruebas sobre Python 3.10.
+   - Optimización de tiempos mediante caché de dependencias pip con `actions/setup-python` y `actions/cache@v4` basándose en el hash de `requirements.txt`.
+   - Ejecución de la suite completa de pruebas con Pytest y generación de reporte de cobertura en formato XML (`coverage.xml`).
+   - Carga de artefactos de cobertura con retención de 7 días (`actions/upload-artifact@v4`).
+3. **`docker-build-and-validate`:**
+   - Soporte avanzado de construcción con Docker Buildx y caché de capas GitHub Actions (`type=gha`).
+   - Validación estática de la especificación con `docker compose config`.
+   - Construcción de la imagen OCI a partir del `Containerfile`.
+   - Levantamiento de los microservicios con `docker compose up -d`.
+   - Verificación de salud y **Smoke Test** funcional ejecutando peticiones reales `POST /predict`.
+   - Desmontaje limpio de servicios y volúmenes con `docker compose down -v`.
+
+### 13.3 Pruebas de Carga con Locust
+
+El escenario en [`tests/load/locustfile.py`](tests/load/locustfile.py) modela un perfil de tráfico altamente representativo distribuido en tres tipos de peticiones:
+- **`GET /health` (10% de tráfico):** Keep-alive y monitoreo sintético.
+- **`POST /predict` (75% de tráfico):** Inferencia unitaria en tiempo real para estaciones de la red.
+- **`POST /predict/batch` (15% de tráfico):** Inferencia en bloque (5 a 10 estaciones) para centros de balanceo.
+
+#### Ejecución Automatizada:
+```powershell
+python scripts/run_load_test.py
+```
+
+#### Métricas de Rendimiento Observadas:
+| Concurrencia (Usuarios) | Throughput (RPS) | Mediana p50 (ms) | Percentil 95 p95 (ms) | Percentil 99 p99 (ms) | Tasa de Error (%) |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| **10** | 48.6 | 14.2 ms | 28.5 ms | 42.1 ms | **0.0%** |
+| **25** | 92.4 | 21.0 ms | 49.2 ms | 68.4 ms | **0.0%** |
+| **50** | 138.2 | 32.5 ms | 82.1 ms | 115.0 ms | **0.0%** |
+| **100** | 172.5 | 54.8 ms | 145.2 ms | 210.5 ms | **0.0%** |
+
+![Curvas de Throughput y Latencia con Locust](reports/figures/performance/locust_latency_rps.png)
+
+- **Cumplimiento de SLA:** La latencia p95 bajo carga máxima (145.2 ms) se mantiene muy por debajo del SLA corporativo de 500 ms, con cero errores (0.0%).
+
+### 13.4 Monitoreo de Recursos del Contenedor (`docker stats`)
+
+Se capturó el consumo de hardware del contenedor de inferencia bajo cada escalón de carga:
+- **Consumo de Memoria:** Altamente estable entre 248 MB y 312 MB (menos del 31% del límite asignado de 1024 MB), lo que demuestra que el modelo CatBoost en memoria no presenta fugas ni acumulación de estado.
+- **Consumo de CPU:** Escala de manera proporcional al tráfico, pasando del 18.5% a 10 usuarios hasta el 84.1% a 100 usuarios. Para sostener más de 200 RPS se recomienda configurar auto-escalado horizontal (HPA) con réplicas adicionales.
+
+![Telemetría de Recursos Docker](reports/figures/performance/container_resource_usage.png)
+
+### 13.5 Análisis FinOps: Estimación del Costo por Inferencia
+
+A través del módulo [`mibici_mlops/finops/cost_calculator.py`](mibici_mlops/finops/cost_calculator.py), se formuló el modelo económico de inferencia:
+
+$$\text{Costo Unitario por Inferencia} = \frac{\text{Costo Horario de Instancia}}{\text{RPS} \times 3600 \times \text{Factor de Utilización}}$$
+
+$$\text{Costo por Millón de Peticiones} = \text{Costo Unitario} \times 1,000,000$$
+
+Considerando un factor de utilización conservador del 70% (valles nocturnos) y un throughput promedio sostenido de 50 RPS:
+
+| Proveedor | Servicio / Instancia | vCPUs / RAM | Tarifa Horaria | Costo Mensual | Costo por 1M Inferencias |
+| :--- | :--- | :---: | :---: | :---: | :---: |
+| **AWS** | **EC2 (`t3.medium`)** | 2 / 4 GB | $0.0416/h | $30.37 USD | **$0.3302 USD** |
+| **AWS** | **ECS Fargate (Serverless)** | 1 / 1 GB | $0.0449/h | $32.78 USD | **$0.3563 USD** |
+| **GCP** | **Cloud Run (Serverless)** | 1 / 1 GB | $0.0520/h | $37.96 USD | **$0.4127 USD** |
+| **GCP** | **Compute Engine (`e2-standard-2`)** | 2 / 8 GB | $0.0670/h | $48.91 USD | **$0.5317 USD** |
+| **AWS** | **EC2 (`c6i.large`)** | 2 / 4 GB | $0.0850/h | $62.05 USD | **$0.6746 USD** |
+
+![Comparativa FinOps por Proveedor de Nube](reports/figures/finops/cost_per_inference_comparison.png)
+
+### 13.6 Estrategias de Optimización FinOps y Ahorro Proyectado
+
+Para un volumen operativo proyectado de **50 millones de inferencias anuales**, se evaluaron cuatro estrategias viables:
+1. **Inferencia por Lotes (Batching):** Agrupar peticiones de racks reduce el costo a **$0.1032 USD / 1M** (ahorro del 68.8%).
+2. **Rightsizing de Recursos:** Reducir la asignación a contenedores de 1 vCPU y 512 MB acordes al consumo real p95 ahorra un **45.0%**.
+3. **Caché en Memoria para Horas Valle:** Atender el 20% de consultas nocturnas sin invocar el modelo ahorra un **20.0%**.
+4. **Instancias Spot y Compute Savings Plans:** Descuentos comerciales de hasta un **35% a 65%**.
+
+![Impacto de Optimizaciones FinOps](reports/figures/finops/finops_optimizations_savings.png)
+
+- **Impacto Total de la Estrategia Integral:** El costo anual proyectado se reduce de **$16,507.94 USD** a **$5,214.28 USD**, representando un **ahorro neto anual de $11,293.66 USD (68.4% de reducción)**.
+
+## 14. Organización del repositorio
 
 ```text
 TC5061-Proyecto-Equipo51/
-├── Containerfile                         # Especificación OCI de contenedor (Podman/Docker)
+├── .github/
+│   └── workflows/
+│       └── ci-cd.yml                     # Pipeline CI/CD en GitHub Actions (lint, tests, build, compose)
 ├── .dockerignore                         # Exclusiones de contexto OCI
+├── .env.example                          # Plantilla de variables de entorno para Docker Compose
+├── Containerfile                         # Especificación OCI de contenedor (Podman/Docker)
+├── docker-compose.yml                    # Orquestación de microservicios (FastAPI + MLflow + Redes + Volúmenes)
+├── Makefile                              # Automatización de tareas de desarrollo y comandos Compose
 ├── data/
 │   ├── raw/                              # CSV descargados; ignorados por Git
 │   └── processed/                        # Datos procesados; ignorados por Git
@@ -960,6 +1090,9 @@ TC5061-Proyecto-Equipo51/
 │   │   ├── main.py                       # Servidor REST FastAPI y endpoints
 │   │   ├── schemas.py                    # Esquemas Pydantic v2 de entrada y salida
 │   │   └── service.py                    # Conexión MLflow Registry e inferencia
+│   ├── finops/
+│   │   ├── __init__.py
+│   │   └── cost_calculator.py            # Modelo de costos FinOps, tarifas nube y optimizaciones
 │   ├── modeling/
 │   │   ├── ab_testing.py                 # Protocolo de A/B testing entre Champion y Challenger
 │   │   ├── predict.py                    # Inferencia en lote y verificación programática
@@ -975,40 +1108,44 @@ TC5061-Proyecto-Equipo51/
 ├── reports/
 │   ├── data_quality/                     # Reportes JSON de auditoría DeepChecks
 │   ├── drift/                            # Reportes de Data Drift y A/B testing (HTML, JSON, Markdown)
-│   │   ├── data_drift_report.html        # Reporte interactivo con Evidently
-│   │   ├── drift_metrics.json            # Métricas estructuradas de deriva
-│   │   ├── drift_summary.md              # Resumen ejecutivo de drift
-│   │   ├── ab_testing_results.json       # Resultados estructurados de A/B testing
-│   │   └── observability_ab_report.md    # Reporte integral de observabilidad
+│   ├── finops/
+│   │   └── finops_load_report.md         # Reporte técnico exhaustivo de Carga y FinOps
+│   ├── performance/
+│   │   └── locust_benchmark_metrics.csv  # Métricas de carga (RPS, latencias, CPU %, RAM)
 │   └── figures/
 │       ├── ab_testing/                   # Gráficos comparativos de métricas y residuales A/B
-│       ├── evidences/
-│       │   ├── week5/                    # Evidencias de seguimiento base
-│       │   ├── week6/                    # Capturas de MLflow UI, Nested Runs y Model Registry
-│       │   ├── week7/                    # Capturas de PyTest, DeepChecks, Bandit y Ruff
-│       │   └── week8/                    # Capturas de ejecución en contenedor OCI
+│       ├── evidences/                    # Evidencias de seguimiento del proyecto
+│       ├── finops/                       # Gráficos de comparativa de costos y ahorros FinOps
+│       ├── performance/                  # Curvas de throughput, percentiles de latencia y recursos
 │       ├── p1_champion/ y p1_challenger/
 │       ├── p2_champion/ y p2_challenger/
 │       └── p3_champion/ y p3_challenger/
+├── scripts/
+│   └── run_load_test.py                  # Script automatizado de benchmarking y generación gráfica
 ├── tests/
 │   ├── conftest.py                       # Fixtures sintéticos compartidos en memoria
+│   ├── load/
+│   │   └── locustfile.py                 # Escenarios ponderados de tráfico para Locust
 │   ├── test_ab_testing.py                # Pruebas de A/B testing, residuales y significancia
-│   ├── test_monitoring.py                # Pruebas de Evidently, data drift y métricas
-│   ├── test_retrain.py                   # Pruebas de reentrenamiento y registro Challenger
 │   ├── test_api.py                       # Pruebas de endpoints FastAPI, schemas e inferencia
+│   ├── test_cicd.py                      # Pruebas unitarias de pipeline GitHub Actions
+│   ├── test_compose.py                   # Pruebas unitarias de configuración Docker Compose
 │   ├── test_dataset.py                   # Ingesta, esquema, hash SHA-256 y DeepChecks
 │   ├── test_features.py                  # Rezagos, rolling, no data leakage y clustering P3
+│   ├── test_finops.py                    # Pruebas unitarias de fórmulas FinOps y Locust
 │   ├── test_models.py                    # Firmas MLflow, inferencia determinista y edge cases
+│   ├── test_monitoring.py                # Pruebas de Evidently, data drift y métricas
+│   ├── test_retrain.py                   # Pruebas de reentrenamiento y registro Challenger
 │   └── test_train.py                     # Pipeline: Reproducibilidad, drift, tags y métricas
 ├── data_manifest.json                    # Versión exacta de las fuentes
 ├── pyproject.toml
-├── requirements.txt                      # Dependencias fijadas
+├── requirements.txt                      # Dependencias fijadas (incluye locust)
 └── README.md
 ```
 
 Las carpetas internas mostradas para datos y modelos se completan después de ejecutar el flujo. Los datos y modelos generados, junto con `mlruns/`, `mlartifacts/` y `mlflow.db`, se excluyen mediante `.gitignore`. Las figuras y capturas de `reports/figures/` sí se conservan en Git. El repositorio conserva código, configuración, pruebas, documentación y metadatos reproducibles.
 
-## 14. Limitaciones y trabajo futuro
+## 15. Limitaciones y trabajo futuro
 
 - Los modelos no incorporan clima, eventos, cierres viales ni festivos externos.
 
@@ -1022,7 +1159,7 @@ Las carpetas internas mostradas para datos y modelos se completan después de ej
 
 - Un uso operativo necesitaría automatización, monitoreo de calidad y una interfaz para consumir predicciones y segmentos.
 
-## 15. Referencias
+## 16. Referencias
 
 - Apache Software Foundation. (s. f.). *Reading and writing the Apache Parquet format*. Apache Arrow. Recuperado el 17 de octubre de 2026, de [https://arrow.apache.org/docs/python/parquet/index.html](https://arrow.apache.org/docs/python/parquet/index.html)
 
