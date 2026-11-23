@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -99,11 +100,49 @@ def test_cli_retrain_help() -> None:
     assert "show-registry-status" in result.stdout
 
 
-def test_cli_show_registry_status() -> None:
-    """Verifica que la consulta del estado del registro en MLflow funcione correctamente."""
+
+def test_cli_show_registry_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verifica la consulta del registro sin depender de una base de datos real."""
+
+    class FakeMlflowClient:
+        def get_registered_model(self, model_name: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                name=model_name,
+                description="Modelo de prueba",
+                aliases={"champion": "3", "challenger": "5"},
+            )
+
+        def search_model_versions(self, filter_string: str) -> list[SimpleNamespace]:
+            return [
+                SimpleNamespace(
+                    version="3",
+                    run_id="1234567890abcdef",
+                    status="READY",
+                    description="Modelo champion",
+                ),
+                SimpleNamespace(
+                    version="5",
+                    run_id="abcdef1234567890",
+                    status="READY",
+                    description="Modelo challenger",
+                ),
+            ]
+
+    monkeypatch.setattr(
+        "mibici_mlops.modeling.retrain.configurar_mlflow",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        "mibici_mlops.modeling.retrain.MlflowClient",
+        FakeMlflowClient,
+    )
+
     result = runner.invoke(app, ["show-registry-status"])
-    assert result.exit_code == 0
+
+    assert result.exit_code == 0, str(result.exception)
     assert "Estado de Model Registry" in result.stdout
     assert "mibici-equipo51-p1-demanda" in result.stdout
     assert "@champion" in result.stdout
     assert "@challenger" in result.stdout
+    assert "v3" in result.stdout
+    assert "v5" in result.stdout
