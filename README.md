@@ -941,127 +941,169 @@ Se establece la siguiente política operativa para gobernar el ciclo de vida del
 
 ## 13. Microservicios, CI/CD y FinOps
 
-En esta entrega el equipo consolidó el proyecto MiBici como un sistema operable, resiliente y económicamente viable:
-1. **Orquestación Multi-Servicio:** Despliegue conjunto de la API de inferencia FastAPI y el servidor de seguimiento MLflow mediante Docker Compose.
-2. **Automatización CI/CD:** Pipeline en GitHub Actions que ejecuta pruebas, linters, análisis de seguridad y validación de levantamiento en contenedores.
-3. **Pruebas de Carga con Locust:** Simulación de tráfico concurrente realista ponderado y evaluación de latencias bajo SLAs corporativos.
-4. **Monitoreo de Recursos:** Medición de telemetría en tiempo real (`docker stats`) para CPU y memoria.
-5. **Análisis FinOps:** Estimación del costo por inferencia en la nube y modelado de optimizaciones con un ahorro proyectado del 68.4%.
+En esta entrega el equipo consolidó el proyecto MiBici como un sistema operable, altamente automatizado y analizado desde la perspectiva de rendimiento y costo computacional:
+1. **Orquestación con Docker Compose (25%):** Despliegue conjunto y desacoplado del microservicio de inferencia FastAPI y del servidor de MLflow Tracking mediante un único comando, optimizado con red bridge interna, volúmenes persistentes, healthchecks coordinados y límites de recursos.
+2. **Pipeline de CI/CD con GitHub Actions (25%):** Automatización completa de linters (`ruff`), escaneo de seguridad AST (`bandit`), matriz de pruebas unitarias/integración con reporte de cobertura XML, caché de dependencias pip y capas Docker, validación estática de Compose y Smoke Test funcional en contenedor.
+3. **Pruebas de Carga con Locust (20%):** Evaluación empírica bajo escenarios de 5, 25, 50 y 100 usuarios virtuales concurrentes con distribución de tráfico ponderada, alcanzando **272.86 solicitudes/segundo (RPS)**, latencia p95 de **94 ms** y **0.0% de tasa de fallos**.
+4. **Monitoreo de Recursos (`docker stats`):** Captura de telemetría en tiempo real de CPU y memoria de los contenedores bajo carga, identificando un consumo de memoria estable en la API (274 MiB, ~26.8% del límite) y CPU al 76.61% promedio.
+5. **Análisis FinOps y Costo por Inferencia (20%):** Modelo matemático que traduce el rendimiento empírico (569.05 inferencias/segundo estimadas) a costos en AWS y GCP, estimando **$0.0290 USD por millón de inferencias** en AWS `t3.medium` y proyectando hasta un **88.5% de ahorro** mediante optimizaciones combinadas.
+6. **Documentación y Trabajo Colaborativo (10%):** Manual operativo paso a paso, historial Git con contribuciones balanceadas de las tres integrantes y reporte técnico integral en [`reports/finops/finops_load_report.md`](reports/finops/finops_load_report.md).
 
-El reporte analítico exhaustivo se encuentra disponible en [`reports/finops/finops_load_report.md`](reports/finops/finops_load_report.md).
+---
 
 ### 13.1 Orquestación con Docker Compose
 
-El archivo [`docker-compose.yml`](docker-compose.yml) configura y levanta todos los servicios requeridos con un solo comando:
+El archivo [`docker-compose.yml`](docker-compose.yml) permite compilar y levantar la arquitectura completa con un solo comando:
 
 ```powershell
-# Construir y levantar los microservicios en segundo plano
+# Levantar los microservicios en segundo plano
 docker compose up -d --build
-# o utilizando el Makefile:
+# o mediante Makefile:
 make compose-up
 ```
 
-#### Servicios Integrados y Configuraciones Avanzadas:
+#### Arquitectura y Configuraciones Avanzadas:
 - **`mlflow` (Tracking Server y Model Registry):**
-  - Expuesto en el puerto `5000:5000`.
-  - Persistencia desacoplada con backend store SQLite (`/app/mlflow.db`) y directorio de modelos (`/app/models`).
-  - Healthcheck nativo consultando `GET http://localhost:5000/health` cada 15 segundos.
+  - Expuesto en el puerto `5000:5000` con configuración de 1 worker y lista blanca de hosts permitidos (`mlflow:5000,localhost:5000,127.0.0.1:5000`).
+  - Persistencia de metadatos con base SQLite montada en `/app/mlflow.db` y artefactos en `/app/mlartifacts`.
+  - Healthcheck nativo verificando `http://localhost:5000/health` cada 15 segundos.
 - **`inference-api` (Microservicio REST FastAPI):**
-  - Expuesto en el puerto `8000:8000`.
-  - Dependencia de inicialización: `depends_on: mlflow` con `condition: service_healthy`, garantizando que la API solo inicie cuando MLflow esté completamente operativo.
-  - Conexión interna a MLflow a través de la URI `http://mlflow:5000`.
-  - Healthcheck nativo consultando `GET http://localhost:8000/health`.
-- **Red Aislada (`mibici-net`):** Red interna tipo `bridge` que proporciona resolución DNS automática entre contenedores sin exponer puertos innecesarios a la red del host.
-- **Límites de Recursos (FinOps Ready):** Especificación de `deploy.resources` con límite de 1.0 CPU y 1024 MB de RAM para evitar saturación del nodo anfitrión.
-- **Plantilla de Variables:** Configuración parametrizada documentada en [`.env.example`](.env.example).
+  - Expuesto en el puerto `8000:8000`, sirviendo el modelo P1 bajo el alias `@champion`.
+  - Dependencia de salud estricta: `depends_on: mlflow` con `condition: service_healthy`, asegurando que la API arranque únicamente cuando MLflow responda exitosamente.
+  - Conexión interna DNS mediante `MLFLOW_TRACKING_URI=http://mlflow:5000`.
+  - Healthcheck nativo verificando `http://localhost:8000/health`.
+- **Red Aislada (`mibici-net`):** Driver tipo `bridge` que aísla la comunicación entre contenedores y resuelve nombres de servicio mediante DNS interno de Docker.
+- **Límites de Recursos (FinOps Ready):** Ambas instancias limitadas a 1 CPU y 1024 MiB de RAM máxima, con reservas mínimas (0.25 CPU y 256 MiB RAM) para garantizar estabilidad del sistema operativo anfitrión.
+- **Plantilla de Variables de Entorno:** [`.env.example`](.env.example) documenta puertos, URIs, alias de modelos y límites de cómputo.
+
+---
 
 ### 13.2 Pipeline de CI/CD con GitHub Actions
 
-El flujo automatizado en [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) se activa ante eventos `push` y `pull_request` en ramas principales y de características (`main`, `develop`, `feat/**`), estructurado en tres jobs secuenciales:
+El archivo [`.github/workflows/ci-cd.yml`](.github/workflows/ci-cd.yml) implementa un pipeline automatizado de tres jobs encadenados:
 
 ```
 [ Push / PR ] ──> [ Job 1: lint-and-security ] ──> [ Job 2: test-suite ] ──> [ Job 3: docker-build-and-validate ]
 ```
 
 1. **`lint-and-security`:**
-   - Verificación de formato y reglas de estilo con `ruff check .` y `ruff format --check .`.
-   - Escaneo estático de vulnerabilidades AST con `bandit -r mibici_mlops -ll`.
+   - Verificación de formato y reglas PEP 8 con `ruff check .` y `ruff format --check .`.
+   - Detección de vulnerabilidades de seguridad estática AST con `bandit -r mibici_mlops -ll`.
 2. **`test-suite`:**
-   - Matriz de pruebas sobre Python 3.10.
-   - Optimización de tiempos mediante caché de dependencias pip con `actions/setup-python` y `actions/cache@v4` basándose en el hash de `requirements.txt`.
-   - Ejecución de la suite completa de pruebas con Pytest y generación de reporte de cobertura en formato XML (`coverage.xml`).
+   - Matriz de pruebas sobre Python 3.10 con aislamiento del plugin de Locust para ejecución limpia.
+   - Caché de dependencias pip con `actions/setup-python` y `actions/cache@v4` utilizando el hash de `requirements.txt` y `pyproject.toml`.
+   - Ejecución completa de la suite de pruebas con Pytest y generación de cobertura en formato XML (`coverage.xml`).
    - Carga de artefactos de cobertura con retención de 7 días (`actions/upload-artifact@v4`).
 3. **`docker-build-and-validate`:**
-   - Soporte avanzado de construcción con Docker Buildx y caché de capas GitHub Actions (`type=gha`).
+   - Soporte de Docker Buildx y caché de capas GitHub Actions (`type=gha,mode=max`).
    - Validación estática de la especificación con `docker compose config`.
-   - Construcción de la imagen OCI a partir del `Containerfile`.
-   - Levantamiento de los microservicios con `docker compose up -d`.
-   - Verificación de salud y **Smoke Test** funcional ejecutando peticiones reales `POST /predict`.
-   - Desmontaje limpio de servicios y volúmenes con `docker compose down -v`.
+   - Construcción de imagen OCI a partir de `Containerfile`.
+   - Despliegue de los servicios con `docker compose up -d` y espera activa de healthchecks (`healthy`).
+   - **Smoke Test Funcional:** Peticiones HTTP a `/health` y prueba de inferencia real enviando un payload de 11 características a `POST /predict`.
+   - Diagnóstico automático en consola en caso de fallo y desmontaje limpio con `docker compose down -v`.
+
+---
 
 ### 13.3 Pruebas de Carga con Locust
 
-El escenario en [`tests/load/locustfile.py`](tests/load/locustfile.py) modela un perfil de tráfico altamente representativo distribuido en tres tipos de peticiones:
-- **`GET /health` (10% de tráfico):** Keep-alive y monitoreo sintético.
-- **`POST /predict` (75% de tráfico):** Inferencia unitaria en tiempo real para estaciones de la red.
-- **`POST /predict/batch` (15% de tráfico):** Inferencia en bloque (5 a 10 estaciones) para centros de balanceo.
+El escenario en [`tests/load/locustfile.py`](tests/load/locustfile.py) y [`tests/load/payload_factory.py`](tests/load/payload_factory.py) evalúa la capacidad de procesamiento bajo tráfico concurrente con tres tareas ponderadas:
+- **`GET /health` (Peso 1):** Verificación de disponibilidad y keep-alive del servicio.
+- **`POST /predict` (Peso 8):** Inferencia unitaria de demanda horaria para una cicloestación.
+- **`POST /predict/batch` (Peso 2):** Inferencia por lotes (5 a 10 estaciones) para centros de balanceo.
 
-#### Ejecución Automatizada:
+#### Ejecución Automatizada del Benchmark:
 ```powershell
 python scripts/run_load_test.py
 ```
 
-#### Métricas de Rendimiento Observadas:
-| Concurrencia (Usuarios) | Throughput (RPS) | Mediana p50 (ms) | Percentil 95 p95 (ms) | Percentil 99 p99 (ms) | Tasa de Error (%) |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| **10** | 48.6 | 14.2 ms | 28.5 ms | 42.1 ms | **0.0%** |
-| **25** | 92.4 | 21.0 ms | 49.2 ms | 68.4 ms | **0.0%** |
-| **50** | 138.2 | 32.5 ms | 82.1 ms | 115.0 ms | **0.0%** |
-| **100** | 172.5 | 54.8 ms | 145.2 ms | 210.5 ms | **0.0%** |
+#### Resultados Empíricos Observados:
+| Concurrencia | Solicitudes Totales | Throughput (RPS) | Mediana p50 (ms) | Percentil 90 p90 (ms) | Percentil 95 p95 (ms) | Percentil 99 p99 (ms) | Tasa de Error |
+| :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **5 usuarios** | 380 | 13.03 | 54 ms | 62 ms | 65 ms | 72 ms | **0.0%** |
+| **25 usuarios** | 4,099 | 69.14 | 49 ms | 53 ms | 54 ms | 58 ms | **0.0%** |
+| **50 usuarios** | 8,188 | 138.19 | 49 ms | 54 ms | 56 ms | 62 ms | **0.0%** |
+| **100 usuarios** | 16,147 | **272.86** | 53 ms | 69 ms | **94 ms** | 160 ms | **0.0%** |
 
-![Curvas de Throughput y Latencia con Locust](reports/figures/performance/locust_latency_rps.png)
+![Rendimiento Locust: RPS y Latencias](reports/figures/performance/locust_latency_rps.png)
 
-- **Cumplimiento de SLA:** La latencia p95 bajo carga máxima (145.2 ms) se mantiene muy por debajo del SLA corporativo de 500 ms, con cero errores (0.0%).
+- **Cumplimiento de SLA:** La latencia p95 bajo 100 usuarios concurrentes (**94 ms**) se sitúa holgadamente por debajo del umbral corporativo de 500 ms, con una tasa de fallos de **0.0%**.
+- **Throughput Efectivo de Inferencias:** Procesando 11,745 peticiones individuales y 2,924 peticiones por lote (promedio de 7.5 observaciones por lote), el sistema atendió 33,675 inferencias en 59.18 segundos, equivalente a **569.05 inferencias por segundo estimadas**.
+
+---
 
 ### 13.4 Monitoreo de Recursos del Contenedor (`docker stats`)
 
-Se capturó el consumo de hardware del contenedor de inferencia bajo cada escalón de carga:
-- **Consumo de Memoria:** Altamente estable entre 248 MB y 312 MB (menos del 31% del límite asignado de 1024 MB), lo que demuestra que el modelo CatBoost en memoria no presenta fugas ni acumulación de estado.
-- **Consumo de CPU:** Escala de manera proporcional al tráfico, pasando del 18.5% a 10 usuarios hasta el 84.1% a 100 usuarios. Para sostener más de 200 RPS se recomienda configurar auto-escalado horizontal (HPA) con réplicas adicionales.
+Durante la prueba de 100 usuarios se recopilaron 16 muestras continuas de telemetría de hardware:
 
-![Telemetría de Recursos Docker](reports/figures/performance/container_resource_usage.png)
+| Contenedor | CPU Promedio | CPU Máxima | RAM Promedio | RAM Máxima | Límite Configurado |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **`mibici-inference-api`** | 76.61 % | 81.01 % | 273.68 MiB | 274.00 MiB | 1 CPU / 1024 MiB (26.8% uso) |
+| **`mibici-mlflow`** | 2.82 % | 27.26 % | 1009.71 MiB | 1013.00 MiB | 1 CPU / 1024 MiB (98.9% uso) |
+
+![Monitoreo de Recursos en Contenedores](reports/figures/performance/container_resource_usage.png)
+
+#### Interpretación Operativa:
+- **API Ligera en Memoria:** La API de inferencia requiere únicamente ~274 MiB para CatBoost y FastAPI, lo que permite un dimensionamiento optimizado (*rightsizing*) en contenedores de 512 MiB de RAM.
+- **CPU como Eje de Escalabilidad:** Con 100 usuarios, la CPU de la API alcanza el 81% de 1 core. Para cargas superiores a 300 RPS se recomienda configurar escalado horizontal (HPA) con réplicas adicionales.
+- **Memoria de MLflow:** El servidor MLflow opera con un consumo cercano al límite (1013 MiB), por lo que se ajustó preventivamente su asignación a 2 GB en entornos de alta demanda.
+
+---
 
 ### 13.5 Análisis FinOps: Estimación del Costo por Inferencia
 
-A través del módulo [`mibici_mlops/finops/cost_calculator.py`](mibici_mlops/finops/cost_calculator.py), se formuló el modelo económico de inferencia:
+Utilizando el módulo [`mibici_mlops/finops/cost_calculator.py`](mibici_mlops/finops/cost_calculator.py), el costo unitario se modela a partir del throughput empírico (569.05 inferencias/s) y un factor de utilización conservador del 70% (valles nocturnos de demanda):
 
-$$\text{Costo Unitario por Inferencia} = \frac{\text{Costo Horario de Instancia}}{\text{RPS} \times 3600 \times \text{Factor de Utilización}}$$
+$$\text{Costo Unitario por Inferencia} = \frac{\text{Tarifa Horaria (USD/h)}}{\text{Inferencias/s} \times 3600 \times \text{Factor de Utilización}}$$
 
-$$\text{Costo por Millón de Peticiones} = \text{Costo Unitario} \times 1,000,000$$
+$$\text{Costo por 1M Inferencias} = \text{Costo Unitario} \times 1,000,000$$
 
-Considerando un factor de utilización conservador del 70% (valles nocturnos) y un throughput promedio sostenido de 50 RPS:
+#### Comparativa entre Proveedores de Nube:
+| Proveedor | Servicio | Configuración de Instancia | Tarifa Horaria (USD) | Costo por Inferencia (USD) | Costo por 1M Inferencias (USD) |
+| :--- | :--- | :--- | :---: | :---: | :---: |
+| **AWS** | **EC2** | `t3.medium` (2 vCPUs, 4 GB RAM) | $0.0416 | $0.000000029 | **$0.0290** |
+| **AWS** | **ECS Fargate** | Serverless Container (1 vCPU, 1 GB) | $0.0449 | $0.000000031 | **$0.0313** |
+| **GCP** | **Cloud Run** | Serverless Pay-per-Request (1 vCPU, 1 GB) | $0.0520 | $0.000000036 | **$0.0363** |
+| **GCP** | **Compute Engine** | `e2-standard-2` (2 vCPUs, 8 GB RAM) | $0.0670 | $0.000000047 | **$0.0467** |
+| **AWS** | **EC2** | `c6i.large` (2 vCPUs, 4 GB Compute-Opt) | $0.0850 | $0.000000059 | **$0.0593** |
 
-| Proveedor | Servicio / Instancia | vCPUs / RAM | Tarifa Horaria | Costo Mensual | Costo por 1M Inferencias |
-| :--- | :--- | :---: | :---: | :---: | :---: |
-| **AWS** | **EC2 (`t3.medium`)** | 2 / 4 GB | $0.0416/h | $30.37 USD | **$0.3302 USD** |
-| **AWS** | **ECS Fargate (Serverless)** | 1 / 1 GB | $0.0449/h | $32.78 USD | **$0.3563 USD** |
-| **GCP** | **Cloud Run (Serverless)** | 1 / 1 GB | $0.0520/h | $37.96 USD | **$0.4127 USD** |
-| **GCP** | **Compute Engine (`e2-standard-2`)** | 2 / 8 GB | $0.0670/h | $48.91 USD | **$0.5317 USD** |
-| **AWS** | **EC2 (`c6i.large`)** | 2 / 4 GB | $0.0850/h | $62.05 USD | **$0.6746 USD** |
+![Comparativa FinOps entre Proveedores de Nube](reports/figures/finops/cost_per_inference_comparison.png)
 
-![Comparativa FinOps por Proveedor de Nube](reports/figures/finops/cost_per_inference_comparison.png)
+- **Costo Altamente Eficiente:** AWS EC2 `t3.medium` presenta el menor costo unitario proyectado (**$0.0290 USD por millón de inferencias**), seguido estrechamente por opciones serverless como AWS ECS Fargate ($0.0313 USD / 1M).
 
-### 13.6 Estrategias de Optimización FinOps y Ahorro Proyectado
+---
 
-Para un volumen operativo proyectado de **50 millones de inferencias anuales**, se evaluaron cuatro estrategias viables:
-1. **Inferencia por Lotes (Batching):** Agrupar peticiones de racks reduce el costo a **$0.1032 USD / 1M** (ahorro del 68.8%).
-2. **Rightsizing de Recursos:** Reducir la asignación a contenedores de 1 vCPU y 512 MB acordes al consumo real p95 ahorra un **45.0%**.
-3. **Caché en Memoria para Horas Valle:** Atender el 20% de consultas nocturnas sin invocar el modelo ahorra un **20.0%**.
-4. **Instancias Spot y Compute Savings Plans:** Descuentos comerciales de hasta un **35% a 65%**.
+### 13.6 Estrategias de Optimización FinOps y Ahorros Proyectados
 
-![Impacto de Optimizaciones FinOps](reports/figures/finops/finops_optimizations_savings.png)
+Para un volumen de referencia de **50 millones de solicitudes anuales**, se simularon cuatro estrategias de optimización sobre una línea base de 45 RPS y tarifa de $0.0416 USD/h:
 
-- **Impacto Total de la Estrategia Integral:** El costo anual proyectado se reduce de **$16,507.94 USD** a **$5,214.28 USD**, representando un **ahorro neto anual de $11,293.66 USD (68.4% de reducción)**.
+| Escenario Evaluado | Mecanismo de Optimización | Costo Anual Proyectado (USD) | Reducción Económica (%) |
+| :--- | :--- | :---: | :---: |
+| **Escenario Base (On-Demand)** | Operación estándar sin optimización | **$18.34** | 0.0% |
+| **Batching Dinámico** | Agrupación de observaciones (+3.2× throughput) | $5.73 | **68.75%** |
+| **Rightsizing de Recursos** | Ajuste de vCPU/RAM a consumo real (45% tarifa) | $10.09 | **45.00%** |
+| **Caché en Memoria / Redis** | 20% de consultas valle resueltas desde caché | $14.67 | **20.00%** |
+| **Estrategia Combinada Integral** | Batching + Rightsizing + Caching + Descuentos (35%) | **$2.10** | **88.55%** |
+
+![Ahorros Simulados mediante Estrategias FinOps](reports/figures/finops/finops_optimizations_savings.png)
+
+- **Impacto Proyectado:** La combinación de optimizaciones permite reducir el gasto computacional proporcional en un **88.5%**, demostrando cómo la ingeniería de software y la observabilidad impactan directamente en el presupuesto operativo.
+
+---
+
+### 13.7 Evidencias Visuales del Sistema Operable
+
+A continuación se presentan las evidencias generadas durante la validación del sistema:
+
+| Evidencia | Descripción | Enlace al Archivo |
+| :--- | :--- | :---: |
+| **Pipeline Verde en GitHub Actions** | Ejecución exitosa de los tres jobs (`lint-and-security`, `test-suite`, `docker-build-and-validate`). | [Ver Captura](reports/figures/evidences/week10/github_actions_pipeline_verde.png) |
+| **Cobertura de Pruebas en CI** | Reporte detallado de cobertura con Pytest y exportación XML en GitHub Actions. | [Ver Captura](reports/figures/evidences/week10/github_actions_tests_coverage.png) |
+| **Microservicios Saludables en Compose** | Verificación de estado `healthy` para `mibici-mlflow` y `mibici-inference-api`. | [Ver Captura](reports/figures/evidences/week10/microservicios_healthy.png) |
+| **Inferencia Exitosa con Champion** | Respuesta HTTP 200 con predicción de demanda desde el microservicio contenerizado. | [Ver Captura](reports/figures/evidences/week10/prediccion_champion_exitosa.png) |
+| **Validaciones Locales Aprobadas** | Ejecución local de linters (`ruff`), seguridad (`bandit`) y pruebas unitarias (`pytest`). | [Ver Captura](reports/figures/evidences/week10/validaciones_locales_ci_passed.png) |
+| **Suite Completa con Cobertura** | Cobertura total de pruebas en el paquete `mibici_mlops`. | [Ver Captura](reports/figures/evidences/week10/suite_completa_con_cobertura.png) |
+
+---
 
 ## 14. Organización del repositorio
 
